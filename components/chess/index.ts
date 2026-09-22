@@ -1,4 +1,9 @@
-export { ChessBoard } from './chess-board';
+export { ChessGame } from './chess-game';
+export { ChessGameStatus } from './chess-game-status';
+export { ChessMoveHistory } from './chess-move-history';
+export { ChessCapturedPieces } from './chess-captured-pieces';
+export { ChessPromotion } from './chess-promotion';
 export { ChessSquare } from './chess-square';
 export { ChessPiece } from './chess-piece';
-export * from './chess-board.types';
+export * from './chess-square.utils';
+export * from '@/lib/chess';

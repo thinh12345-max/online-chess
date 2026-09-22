@@ -1,4 +1,4 @@
-import type { Piece } from './chess-board.types';
+import type { Piece } from '@/lib/chess/types';
 
 interface ChessPieceProps {
   piece: Piece;
