@@ -16,3 +16,18 @@
 
 export * from './types';
 export * from './room';
+
+// Services - selective export to avoid conflicts
+export {
+  getPlayerId,
+  clearPlayerId,
+  isValidPlayerId,
+  type LocalStorageRoomStorage,
+  getRoomStorage,
+  createRoom,
+  getRoom,
+  updateRoom,
+  joinRoom,
+  isValidRoomId,
+  getPlayerRoom,
+} from './services';
