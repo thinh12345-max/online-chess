@@ -1,9 +1,9 @@
 /**
  * Supabase Module
  *
- * Provides Supabase integration for the chess application.
- * Currently includes client initialization only.
- * Realtime functionality will be added in future steps.
+ * Provides Supabase client, configuration, and types for database integration.
  */
 
+export * from './config';
 export * from './client';
+export * from './types';

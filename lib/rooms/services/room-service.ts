@@ -5,9 +5,32 @@
  * Uses RoomStorage for persistence.
  */
 
-import { createRoom as createRoomModel, joinRoom as joinRoomModel } from '../room';
+import {
+  createRoom as createRoomModel,
+  joinRoom as joinRoomModel,
+  applyMoveToRoom as applyMoveToRoomModel,
+  type JoinResult
+} from '../room';
 import { getRoomStorage, type RoomStorage } from './room-storage';
-import type { Room } from '../types';
+import type { Room, ChessMovePayload } from '../types';
+
+/**
+ * Move result
+ */
+export type MoveResult =
+  | { success: true; room: Room }
+  | { success: false; error: MoveError };
+
+/**
+ * Move errors
+ */
+export type MoveError =
+  | 'room_not_found'
+  | 'player_not_in_room'
+  | 'not_your_turn'
+  | 'game_not_active'
+  | 'invalid_move'
+  | 'game_already_finished';
 
 /**
  * Create a new room
@@ -84,7 +107,7 @@ export function joinRoom(
     return { success: false, error: 'room_not_found' };
   }
 
-  const result = joinRoomModel(room, { roomId, playerId });
+  const result: JoinResult = joinRoomModel(room, { roomId, playerId });
 
   if (result.success) {
     // Update room in storage
@@ -93,6 +116,50 @@ export function joinRoom(
   }
 
   return { success: false, error: result.error };
+}
+
+/**
+ * Apply a move to a room
+ * This is the server-authoritative move application
+ *
+ * @param roomId - The room ID
+ * @param playerId - The player's ID making the move
+ * @param payload - The move payload
+ * @param storage - Optional storage instance
+ * @returns Result with updated room if successful, error if failed
+ */
+export function applyMove(
+  roomId: string,
+  playerId: string,
+  payload: ChessMovePayload,
+  storage?: RoomStorage
+): MoveResult {
+  const room = (storage ?? getRoomStorage()).getRoom(roomId);
+
+  if (!room) {
+    return { success: false, error: 'room_not_found' };
+  }
+
+  const result = applyMoveToRoomModel(room, playerId, payload);
+
+  if (result.success) {
+    // Update room in storage (persistence layer)
+    (storage ?? getRoomStorage()).saveRoom(result.room);
+    return { success: true, room: result.room };
+  }
+
+  // Map error to MoveError
+  const errorMap: Record<string, MoveError> = {
+    player_not_in_room: 'player_not_in_room',
+    not_your_turn: 'not_your_turn',
+    game_not_active: 'game_not_active',
+    invalid_move: 'invalid_move',
+  };
+
+  return {
+    success: false,
+    error: errorMap[result.error] ?? 'invalid_move'
+  };
 }
 
 /**

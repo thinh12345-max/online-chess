@@ -22,6 +22,9 @@ export {
   getRoom,
   updateRoom,
   joinRoom,
+  applyMove,
   isValidRoomId,
   getPlayerRoom,
+  type MoveResult,
+  type MoveError,
 } from './room-service';

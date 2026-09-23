@@ -1,4 +1,5 @@
 export { ChessGame } from './chess-game';
+export { OnlineChessGame } from './chess-online-game';
 export { ChessGameStatus } from './chess-game-status';
 export { ChessMoveHistory } from './chess-move-history';
 export { ChessCapturedPieces } from './chess-captured-pieces';

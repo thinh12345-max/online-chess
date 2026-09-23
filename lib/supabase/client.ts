@@ -1,71 +1,51 @@
 /**
- * Supabase Configuration
+ * Supabase Client
  *
- * Provides Supabase configuration utilities for database access.
+ * Provides Supabase client for database access and realtime subscriptions.
  * Environment variables must be configured before use.
- *
- * Note: This is a foundation file. The actual Supabase client package
- * (@supabase/supabase-js) will be installed when realtime/database
- * functionality is needed in a future step.
  */
 
+import { createClient, type SupabaseClient as SupabaseClientType } from '@supabase/supabase-js';
+import { getSupabaseConfig } from './config';
+
 /**
- * Supabase configuration
+ * Singleton Supabase client instance
  */
-export interface SupabaseConfig {
-  url: string;
-  key: string;
+let supabaseClient: SupabaseClientType | null = null;
+
+/**
+ * Get Supabase client
+ * Creates client from environment variables if not already created
+ *
+ * @throws Error if Supabase is not configured
+ */
+export function getSupabaseClient(): SupabaseClientType {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+
+  const config = getSupabaseConfig();
+
+  if (!config) {
+    throw new Error(
+      'Supabase environment variables are not configured. ' +
+      'Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env.local file.'
+    );
+  }
+
+  supabaseClient = createClient(config.url, config.key);
+  return supabaseClient;
 }
 
 /**
  * Check if Supabase is configured
+ * Re-exported from config for convenience
  */
-export function isSupabaseConfigured(): boolean {
-  return getSupabaseConfig() !== null;
-}
+export { isSupabaseConfigured } from './config';
 
 /**
- * Get Supabase config from environment variables
- * Returns null if not configured
- *
- * Usage:
- * ```typescript
- * import { getSupabaseConfig } from '@/lib/supabase';
- *
- * const config = getSupabaseConfig();
- * if (config) {
- *   // Use config.url and config.key to create client
- * }
- * ```
+ * Reset the client (useful for testing)
  */
-export function getSupabaseConfig(): SupabaseConfig | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !key) {
-    return null;
-  }
-
-  return { url, key };
-}
-
-/**
- * Validate Supabase environment variables
- * Useful for debugging configuration issues
- */
-export function validateSupabaseConfig(): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    errors.push('NEXT_PUBLIC_SUPABASE_URL is not set');
-  }
-
-  if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    errors.push('NEXT_PUBLIC_SUPABASE_ANON_KEY is not set');
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
+export function resetSupabaseClient(): void {
+  supabaseClient = null;
 }
