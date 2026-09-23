@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# But keep .env.example tracked so it's part of the project
+!.env.example
 
 # vercel
 .vercel
