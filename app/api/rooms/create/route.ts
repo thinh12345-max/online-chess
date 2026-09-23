@@ -3,10 +3,13 @@
  *
  * Server-side endpoint for creating a new room.
  * POST: Create new room
+ *
+ * All database operations use the service-role client (bypasses RLS).
+ * Authorization is enforced at the API route level.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabaseServiceRoleClient } from '@/lib/supabase';
 import { createRoom as createRoomLocal } from '@/lib/rooms/services';
 
 export const runtime = 'edge';
@@ -37,25 +40,24 @@ export async function POST(
     // Create room locally (playerId is required)
     const room = createRoomLocal(playerId ?? 'anonymous');
 
-    // Try to persist to Supabase if configured
-    if (isSupabaseConfigured()) {
-      const supabase = getSupabaseClient();
+    // Persist to Supabase using service-role client (bypasses RLS).
+    // This INSERT is authorized by the API route's own logic.
+    const supabase = getSupabaseServiceRoleClient();
 
-      const { error: insertError } = await supabase
-        .from('rooms')
-        .insert({
-          room_id: room.roomId,
-          status: room.status,
-          white_player_id: room.playerWhite?.playerId ?? null,
-          black_player_id: null,
-          game_state: room.gameState,
-          version: room.version,
-        });
+    const { error: insertError } = await supabase
+      .from('rooms')
+      .insert({
+        room_id: room.roomId,
+        status: room.status,
+        white_player_id: room.playerWhite?.playerId ?? null,
+        black_player_id: null,
+        game_state: room.gameState,
+        version: room.version,
+      });
 
-      if (insertError) {
-        console.error('Failed to persist room to Supabase:', insertError);
-        // Continue with local room - client will use localStorage
-      }
+    if (insertError) {
+      console.error('Failed to persist room to Supabase:', insertError);
+      // Continue with local room - client will use localStorage
     }
 
     return NextResponse.json({

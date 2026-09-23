@@ -4,11 +4,12 @@
  * Server-side endpoint for making moves in a room.
  * This is the authoritative move handler with optimistic locking.
  *
- * POST /api/rooms/[roomId]/move
+ * All database operations use the service-role client (bypasses RLS).
+ * Authorization (player in room, correct turn, legal move) is enforced at the API route level.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabaseServiceRoleClient } from '@/lib/supabase';
 import { roomRowToRoom, type RoomRowRaw } from '@/lib/supabase/types';
 import { applyMoveToRoom } from '@/lib/rooms/room';
 import type { Room } from '@/lib/rooms/types';
@@ -42,8 +43,11 @@ export async function POST(
   { params }: { params: Promise<{ roomId: string }> }
 ) {
   try {
-    // Check Supabase configuration
-    if (!isSupabaseConfigured()) {
+    // Check service role configuration
+    let supabase: ReturnType<typeof getSupabaseServiceRoleClient> | null = null;
+    try {
+      supabase = getSupabaseServiceRoleClient();
+    } catch {
       return NextResponse.json(
         { error: 'Server not configured for multiplayer' },
         { status: 503 }
@@ -108,10 +112,7 @@ export async function POST(
     // Build move payload
     const payload: ChessMovePayload = { from, to, promotion };
 
-    // Get Supabase client
-    const supabase = getSupabaseClient();
-
-    // Fetch current room state from database
+    // Fetch current room state from database (service-role, bypasses RLS)
     const { data: roomRow, error: fetchError } = await supabase
       .from('rooms')
       .select('*')
@@ -161,7 +162,7 @@ export async function POST(
       );
     }
 
-    // Atomic optimistic lock update
+    // Atomic optimistic lock update (service-role, bypasses RLS)
     // Only succeeds if the version hasn't changed since we read it
     const { data: updatedRow, error: updateError } = await supabase
       .from('rooms')

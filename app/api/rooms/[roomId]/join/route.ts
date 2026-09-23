@@ -3,10 +3,13 @@
  *
  * Server-side endpoint for joining a room.
  * POST: Join room as second player
+ *
+ * All database operations use the service-role client (bypasses RLS).
+ * Authorization is enforced at the API route level.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabaseServiceRoleClient } from '@/lib/supabase';
 import { joinRoom as joinRoomLocal } from '@/lib/rooms/services';
 
 export const runtime = 'edge';
@@ -55,55 +58,25 @@ export async function POST(
       );
     }
 
-    // Try to join via Supabase if configured
-    if (isSupabaseConfigured()) {
-      const { getSupabaseClient } = await import('@/lib/supabase');
+    // Use service-role client (bypasses RLS).
+    // API route logic handles authorization.
+    const supabase = getSupabaseServiceRoleClient();
 
-      const supabase = getSupabaseClient();
+    // Fetch current room (to validate it exists)
+    const { error: fetchError } = await supabase
+      .from('rooms')
+      .select('room_id')
+      .eq('room_id', roomId)
+      .single();
 
-      // Fetch current room (to validate it exists)
-      const { error: fetchError } = await supabase
-        .from('rooms')
-        .select('room_id')
-        .eq('room_id', roomId)
-        .single();
-
-      if (fetchError) {
-        return NextResponse.json(
-          { success: false, error: 'room_not_found' },
-          { status: 404 }
-        );
-      }
-
-      // Use local join logic
-      const result = joinRoomLocal(roomId, playerId);
-
-      if (!result.success) {
-        return NextResponse.json(
-          { success: false, error: result.error },
-          { status: 400 }
-        );
-      }
-
-      // Update room in Supabase
-      await supabase
-        .from('rooms')
-        .update({
-          status: result.room.status,
-          white_player_id: result.room.playerWhite?.playerId ?? null,
-          black_player_id: result.room.playerBlack?.playerId ?? null,
-          version: result.room.version,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('room_id', roomId);
-
-      return NextResponse.json({
-        success: true,
-        room: result.room,
-      });
+    if (fetchError) {
+      return NextResponse.json(
+        { success: false, error: 'room_not_found' },
+        { status: 404 }
+      );
     }
 
-    // Fallback to localStorage
+    // Apply join logic locally (domain validation)
     const result = joinRoomLocal(roomId, playerId);
 
     if (!result.success) {
@@ -112,6 +85,18 @@ export async function POST(
         { status: 400 }
       );
     }
+
+    // Update room in Supabase using service-role client
+    await supabase
+      .from('rooms')
+      .update({
+        status: result.room.status,
+        white_player_id: result.room.playerWhite?.playerId ?? null,
+        black_player_id: result.room.playerBlack?.playerId ?? null,
+        version: result.room.version,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('room_id', roomId);
 
     return NextResponse.json({
       success: true,

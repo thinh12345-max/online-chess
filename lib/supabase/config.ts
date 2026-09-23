@@ -13,12 +13,28 @@ export interface SupabaseConfig {
 }
 
 /**
- * Get Supabase config from environment variables
- * Returns null if not configured
+ * Get Supabase config from environment variables (anon key for browser).
+ * Returns null if not configured.
  */
 export function getSupabaseConfig(): SupabaseConfig | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !key) {
+    return null;
+  }
+
+  return { url, key };
+}
+
+/**
+ * Get Supabase service-role config (server-only, bypasses RLS).
+ * Reads SUPABASE_SERVICE_ROLE_KEY — must NEVER be exposed to the browser.
+ * Returns null if not configured.
+ */
+export function getSupabaseServiceRoleConfig(): SupabaseConfig | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url || !key) {
     return null;

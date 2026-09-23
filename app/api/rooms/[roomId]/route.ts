@@ -3,6 +3,9 @@
  *
  * Server-side endpoint for room operations.
  * GET: Fetch room by ID
+ *
+ * Uses the anon client so RLS is enforced on reads.
+ * Browser-side reading flows through this route rather than using Supabase directly.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

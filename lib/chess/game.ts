@@ -153,6 +153,8 @@ export function getMoveHistory(chess: Chess): MoveHistoryEntry[] {
   const history = chess.history({ verbose: true });
   const result: MoveHistoryEntry[] = [];
 
+  // history array is ordered: [white_move_0, black_move_0, white_move_1, black_move_1, ...]
+  // Pair white (index 0, 2, 4, ...) with black (index 1, 3, 5, ...)
   for (let i = 0; i < history.length; i += 2) {
     const entry: MoveHistoryEntry = {
       moveNumber: Math.floor(i / 2) + 1,
@@ -160,7 +162,7 @@ export function getMoveHistory(chess: Chess): MoveHistoryEntry[] {
     if (history[i]) {
       entry.white = history[i].san;
     }
-    if (history[i + 1]) {
+    if (i + 1 < history.length && history[i + 1]) {
       entry.black = history[i + 1].san;
     }
     result.push(entry);

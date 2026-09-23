@@ -1,27 +1,36 @@
 /**
  * Supabase Client
  *
- * Provides Supabase client for database access and realtime subscriptions.
+ * Provides Supabase clients for database access and realtime subscriptions.
+ *
+ * Two client types:
+ * - Anon client: for browser (RLS enforced, uses NEXT_PUBLIC_SUPABASE_ANON_KEY)
+ * - Service-role client: for server-side API routes (RLS bypassed, uses SUPABASE_SERVICE_ROLE_KEY)
+ *
  * Environment variables must be configured before use.
+ *
+ * SECURITY: The service-role client bypasses RLS. It must NEVER be exposed to the browser.
+ * Only use it in server-only contexts (API routes, server actions, etc.).
  */
 
 import { createClient, type SupabaseClient as SupabaseClientType } from '@supabase/supabase-js';
-import { getSupabaseConfig } from './config';
+import { getSupabaseConfig, getSupabaseServiceRoleConfig } from './config';
 
 /**
- * Singleton Supabase client instance
+ * Singleton Supabase client instances
  */
-let supabaseClient: SupabaseClientType | null = null;
+let anonClient: SupabaseClientType | null = null;
+let serviceRoleClient: SupabaseClientType | null = null;
 
 /**
- * Get Supabase client
- * Creates client from environment variables if not already created
+ * Get the ANON Supabase client for browser use.
+ * RLS policies are enforced with this client.
  *
  * @throws Error if Supabase is not configured
  */
 export function getSupabaseClient(): SupabaseClientType {
-  if (supabaseClient) {
-    return supabaseClient;
+  if (anonClient) {
+    return anonClient;
   }
 
   const config = getSupabaseConfig();
@@ -33,8 +42,34 @@ export function getSupabaseClient(): SupabaseClientType {
     );
   }
 
-  supabaseClient = createClient(config.url, config.key);
-  return supabaseClient;
+  anonClient = createClient(config.url, config.key);
+  return anonClient;
+}
+
+/**
+ * Get the SERVICE-ROLE Supabase client for server-side API routes.
+ * RLS policies are BYPASSED — use only in trusted server contexts.
+ * This key must NEVER be exposed to the browser.
+ *
+ * @throws Error if service role key is not configured
+ */
+export function getSupabaseServiceRoleClient(): SupabaseClientType {
+  if (serviceRoleClient) {
+    return serviceRoleClient;
+  }
+
+  const config = getSupabaseServiceRoleConfig();
+
+  if (!config) {
+    throw new Error(
+      'Supabase service-role key is not configured. ' +
+      'Please set SUPABASE_SERVICE_ROLE_KEY in your .env.local file. ' +
+      'This variable must NOT be prefixed with NEXT_PUBLIC_ and must never be exposed to the browser.'
+    );
+  }
+
+  serviceRoleClient = createClient(config.url, config.key);
+  return serviceRoleClient;
 }
 
 /**
@@ -44,8 +79,9 @@ export function getSupabaseClient(): SupabaseClientType {
 export { isSupabaseConfigured } from './config';
 
 /**
- * Reset the client (useful for testing)
+ * Reset clients (useful for testing)
  */
-export function resetSupabaseClient(): void {
-  supabaseClient = null;
+export function resetSupabaseClients(): void {
+  anonClient = null;
+  serviceRoleClient = null;
 }
