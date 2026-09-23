@@ -2,7 +2,7 @@
  * Move API Route
  *
  * Server-side endpoint for making moves in a room.
- * This is the authoritative move handler.
+ * This is the authoritative move handler with optimistic locking.
  *
  * POST /api/rooms/[roomId]/move
  */
@@ -14,12 +14,12 @@ import { applyMoveToRoom } from '@/lib/rooms/room';
 import type { Room } from '@/lib/rooms/types';
 import type { ChessMovePayload } from '@/lib/rooms/types';
 
-export const runtime = 'edge'; // Use Edge Runtime for faster response
+export const runtime = 'edge';
 
 /**
  * POST /api/rooms/[roomId]/move
  *
- * Makes a move in the specified room.
+ * Makes a move in the specified room with optimistic locking.
  *
  * Request body:
  * {
@@ -34,6 +34,7 @@ export const runtime = 'edge'; // Use Edge Runtime for faster response
  * - 400: Invalid request body
  * - 403: Not your turn or not your room
  * - 404: Room not found
+ * - 409: Conflict — room state changed (optimistic lock failure)
  * - 500: Server error
  */
 export async function POST(
@@ -127,7 +128,7 @@ export async function POST(
     // Convert to Room object
     const room: Room = roomRowToRoom(roomRow as RoomRowRaw);
 
-    // Apply move (validates player, turn, legality)
+    // Apply move (validates player, turn, legality, game state)
     const result = applyMoveToRoom(room, playerId, payload);
 
     if (!result.success) {
@@ -160,30 +161,35 @@ export async function POST(
       );
     }
 
-    // Update room in database
-    const { error: updateError } = await supabase
+    // Atomic optimistic lock update
+    // Only succeeds if the version hasn't changed since we read it
+    const { data: updatedRow, error: updateError } = await supabase
       .from('rooms')
       .update({
         status: result.room.status,
         white_player_id: result.room.playerWhite?.playerId ?? null,
         black_player_id: result.room.playerBlack?.playerId ?? null,
         game_state: result.room.gameState,
+        version: result.room.version,
         updated_at: new Date().toISOString(),
       })
-      .eq('room_id', roomId);
+      .eq('room_id', roomId)
+      .eq('version', room.version) // optimistic lock: only update if version matches
+      .select()
+      .single();
 
-    if (updateError) {
-      console.error('Failed to update room:', updateError);
+    if (updateError || !updatedRow) {
+      // Either a DB error or 0 rows affected (version mismatch = concurrent conflict)
       return NextResponse.json(
-        { error: 'Failed to save move' },
-        { status: 500 }
+        { error: 'CONFLICT', message: 'Room state changed before this move was committed. Please refresh and try again.' },
+        { status: 409 }
       );
     }
 
-    // Return updated room
+    // Return updated room with new version
     return NextResponse.json({
       success: true,
-      room: result.room,
+      room: roomRowToRoom(updatedRow as RoomRowRaw),
     });
 
   } catch (error) {

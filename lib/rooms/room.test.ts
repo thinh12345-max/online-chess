@@ -573,7 +573,14 @@ describe('Room Serialization', () => {
     }
   });
 
-  it('serialization preserves game state', () => {
+  it('serialization preserves version', () => {
+    const room = createRoom();
+    const serialized = serializeRoom(room);
+    const deserialized = deserializeRoom(serialized);
+    expect(deserialized.version).toBe(room.version);
+  });
+
+  it('serializes and deserializes room correctly', () => {
     // Setup room with two players
     const room = createRoom();
     const joinResult = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });

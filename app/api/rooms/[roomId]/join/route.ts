@@ -92,6 +92,7 @@ export async function POST(
           status: result.room.status,
           white_player_id: result.room.playerWhite?.playerId ?? null,
           black_player_id: result.room.playerBlack?.playerId ?? null,
+          version: result.room.version,
           updated_at: new Date().toISOString(),
         })
         .eq('room_id', roomId);

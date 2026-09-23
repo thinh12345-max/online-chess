@@ -18,6 +18,7 @@ export interface RoomRow {
   white_player_id: string | null;
   black_player_id: string | null;
   game_state: SerializableChessState;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +33,7 @@ export interface RoomRowRaw {
   white_player_id: string | null;
   black_player_id: string | null;
   game_state: SerializableChessState;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -50,6 +52,7 @@ export function roomRowToRoom(row: RoomRowRaw): Room {
       ? { playerId: row.black_player_id, color: 'black', joinedAt: new Date(row.updated_at) }
       : null,
     gameState: row.game_state,
+    version: row.version,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -65,6 +68,7 @@ export function roomToRoomRow(room: Room): Omit<RoomRowRaw, 'id'> {
     white_player_id: room.playerWhite?.playerId ?? null,
     black_player_id: room.playerBlack?.playerId ?? null,
     game_state: room.gameState,
+    version: room.version,
     created_at: room.createdAt.toISOString(),
     updated_at: room.updatedAt.toISOString(),
   };

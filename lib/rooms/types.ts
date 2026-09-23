@@ -100,6 +100,8 @@ export interface Room {
   playerBlack: Player | null;
   /** Serializable chess game state */
   gameState: SerializableChessState;
+  /** Optimistic locking version - increments on each successful update */
+  version: number;
   /** When the room was created */
   createdAt: Date;
   /** When the room was last updated */

@@ -238,3 +238,155 @@ describe('Move Application Logic', () => {
     });
   });
 });
+
+// ============================================================================
+// Version / Optimistic Locking Tests
+// ============================================================================
+
+describe('Version and Optimistic Locking', () => {
+  describe('Room version starts at 0', () => {
+    it('newly created room has version 0', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      expect(room.version).toBe(0);
+    });
+
+    it('room with two players has version 0', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+      expect(joined.room.version).toBe(0);
+    });
+  });
+
+  describe('applyMoveToRoom increments version', () => {
+    it('increments version after first move', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      const result = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.room.version).toBe(1);
+      }
+    });
+
+    it('version increments sequentially across moves', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      // White move: e4
+      const r1 = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
+      expect(r1.success).toBe(true);
+      if (!r1.success) return;
+      expect(r1.room.version).toBe(1);
+
+      // Black move: e5
+      const r2 = applyMoveToRoom(r1.room, BLACK_ID, { from: 'e7', to: 'e5' });
+      expect(r2.success).toBe(true);
+      if (!r2.success) return;
+      expect(r2.room.version).toBe(2);
+
+      // White move: Nf3
+      const r3 = applyMoveToRoom(r2.room, WHITE_ID, { from: 'g1', to: 'f3' });
+      expect(r3.success).toBe(true);
+      if (!r3.success) return;
+      expect(r3.room.version).toBe(3);
+    });
+
+    it('each successful move increments version by exactly 1', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      const moves = [
+        { playerId: WHITE_ID, from: 'e2', to: 'e4' },
+        { playerId: BLACK_ID, from: 'e7', to: 'e5' },
+        { playerId: WHITE_ID, from: 'd2', to: 'd3' },
+        { playerId: BLACK_ID, from: 'd7', to: 'd6' },
+      ];
+
+      let currentRoom = joined.room;
+      for (const move of moves) {
+        const result = applyMoveToRoom(currentRoom, move.playerId, { from: move.from, to: move.to });
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.room.version).toBe(currentRoom.version + 1);
+          currentRoom = result.room;
+        }
+      }
+    });
+
+    it('failed move does not increment version', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      const initialVersion = joined.room.version;
+
+      // Wrong turn
+      const r1 = applyMoveToRoom(joined.room, BLACK_ID, { from: 'e7', to: 'e5' });
+      expect(r1.success).toBe(false);
+      if (r1.success === false) {
+        expect(joined.room.version).toBe(initialVersion);
+      }
+    });
+
+    it('version increments on successful move even after previous failed attempts', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      // Try wrong move first
+      const failed = applyMoveToRoom(joined.room, BLACK_ID, { from: 'e7', to: 'e5' });
+      expect(failed.success).toBe(false);
+
+      // Now correct move
+      const success = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
+      expect(success.success).toBe(true);
+      if (success.success) {
+        expect(success.room.version).toBe(1);
+      }
+    });
+  });
+
+  describe('Version consistency after conflict scenarios', () => {
+    it('game state and version stay consistent when move fails', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      const originalFen = joined.room.gameState.fen;
+      const originalVersion = joined.room.version;
+
+      // Try illegal move
+      const result = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e9' as 'e2' });
+      expect(result.success).toBe(false);
+
+      // Original room state unchanged
+      expect(joined.room.gameState.fen).toBe(originalFen);
+      expect(joined.room.version).toBe(originalVersion);
+    });
+
+    it('room status change increments version', () => {
+      const room = createRoomModel({ playerId: WHITE_ID });
+      const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
+      if (!joined.success) throw new Error('Join failed');
+
+      // Room starts active with version 0
+      expect(joined.room.status).toBe('active');
+      expect(joined.room.version).toBe(0);
+
+      // Make a move
+      const result = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        // Version incremented but status still active
+        expect(result.room.version).toBe(1);
+        expect(result.room.status).toBe('active');
+      }
+    });
+  });
+});

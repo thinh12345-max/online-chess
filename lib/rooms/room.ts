@@ -163,6 +163,7 @@ export function createRoom(options: CreateRoomOptions = {}): Room {
     playerWhite: player,
     playerBlack: null,
     gameState: createSerializableState(chess),
+    version: 0,
     createdAt: now,
     updatedAt: now,
   };
@@ -403,6 +404,7 @@ export function applyMoveToRoom(
   const updatedRoom: Room = {
     ...room,
     gameState: createSerializableState(chess),
+    version: room.version + 1,
     updatedAt: new Date(),
     // Auto-finish if game is over
     status: isGameOver({ ...room, gameState: createSerializableState(chess) }) ? 'finished' : room.status,
@@ -426,6 +428,7 @@ export function serializeRoom(room: Room): SerializedRoom {
     playerWhite: room.playerWhite ? serializePlayer(room.playerWhite) : null,
     playerBlack: room.playerBlack ? serializePlayer(room.playerBlack) : null,
     gameState: room.gameState,
+    version: room.version,
     createdAt: room.createdAt.toISOString(),
     updatedAt: room.updatedAt.toISOString(),
   };
@@ -442,6 +445,7 @@ export function deserializeRoom(serialized: SerializedRoom): Room {
     playerWhite: serialized.playerWhite ? deserializePlayer(serialized.playerWhite) : null,
     playerBlack: serialized.playerBlack ? deserializePlayer(serialized.playerBlack) : null,
     gameState: serialized.gameState,
+    version: serialized.version,
     createdAt: new Date(serialized.createdAt),
     updatedAt: new Date(serialized.updatedAt),
   };
@@ -465,6 +469,7 @@ export interface SerializedRoom {
   playerWhite: SerializedPlayer | null;
   playerBlack: SerializedPlayer | null;
   gameState: SerializableChessState;
+  version: number;
   createdAt: string;
   updatedAt: string;
 }

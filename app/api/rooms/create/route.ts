@@ -49,6 +49,7 @@ export async function POST(
           white_player_id: room.playerWhite?.playerId ?? null,
           black_player_id: null,
           game_state: room.gameState,
+          version: room.version,
         });
 
       if (insertError) {
