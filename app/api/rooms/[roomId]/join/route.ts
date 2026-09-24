@@ -10,7 +10,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServiceRoleClient } from '@/lib/supabase';
-import { joinRoom as joinRoomLocal } from '@/lib/rooms/services';
+import { roomRowToRoom, type RoomRowRaw } from '@/lib/supabase/types';
+import { joinRoom as joinRoomModel } from '@/lib/rooms/room';
 
 export const runtime = 'edge';
 
@@ -62,32 +63,42 @@ export async function POST(
     // API route logic handles authorization.
     const supabase = getSupabaseServiceRoleClient();
 
-    // Fetch current room (to validate it exists)
-    const { error: fetchError } = await supabase
+    // Fetch current room state from Supabase
+    const { data: roomRow, error: fetchError } = await supabase
       .from('rooms')
-      .select('room_id')
+      .select('*')
       .eq('room_id', roomId)
       .single();
 
-    if (fetchError) {
+    if (fetchError || !roomRow) {
       return NextResponse.json(
         { success: false, error: 'room_not_found' },
         { status: 404 }
       );
     }
 
-    // Apply join logic locally (domain validation)
-    const result = joinRoomLocal(roomId, playerId);
+    // Deserialize room from database row
+    const room = roomRowToRoom(roomRow as RoomRowRaw);
+
+    // Apply join logic (validates player, room state, full/finished)
+    const result = joinRoomModel(room, { roomId, playerId });
 
     if (!result.success) {
+      // Map domain error to HTTP-friendly error
+      const errorMap: Record<string, string> = {
+        invalid_room_id: 'Invalid player ID',
+        room_full: 'Room is full',
+        room_finished: 'Game is already finished',
+        already_joined: 'You are already in this room',
+      };
       return NextResponse.json(
-        { success: false, error: result.error },
+        { success: false, error: result.error, message: errorMap[result.error] ?? result.error },
         { status: 400 }
       );
     }
 
-    // Update room in Supabase using service-role client
-    await supabase
+    // Persist updated room to Supabase (service-role bypasses RLS)
+    const { data: updatedRow, error: updateError } = await supabase
       .from('rooms')
       .update({
         status: result.room.status,
@@ -96,11 +107,21 @@ export async function POST(
         version: result.room.version,
         updated_at: new Date().toISOString(),
       })
-      .eq('room_id', roomId);
+      .eq('room_id', roomId)
+      .select()
+      .single();
+
+    if (updateError || !updatedRow) {
+      console.error('Failed to persist join to Supabase:', updateError);
+      return NextResponse.json(
+        { error: 'Failed to join room' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
-      room: result.room,
+      room: roomRowToRoom(updatedRow as RoomRowRaw),
     });
 
   } catch (error) {

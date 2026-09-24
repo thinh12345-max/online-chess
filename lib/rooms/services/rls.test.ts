@@ -166,7 +166,7 @@ describe('RLS Hardening Architecture', () => {
 
     it('join API route still works', () => {
       const joinRoute = readFile('app/api/rooms/[roomId]/join/route.ts');
-      expect(joinRoute).toContain('joinRoomLocal');
+      expect(joinRoute).toContain('joinRoomModel');
       expect(joinRoute).toContain('success: true');
     });
 

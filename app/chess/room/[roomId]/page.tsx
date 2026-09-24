@@ -189,25 +189,43 @@ export default function RoomPage({ params }: RoomPageProps) {
   // Handle realtime state updates
   const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
     const currentState = roomState;
-    if (currentState.status !== 'ready' || !('player' in currentState)) return;
+
+    // Guard: must have a player assigned (waiting or ready)
+    if (!('player' in currentState)) return;
 
     const { player } = currentState;
-    const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
-    const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
 
     if (updatedRoom.status === 'finished') {
       setRoomState({ status: 'finished', room: updatedRoom, player });
-    } else {
+      return;
+    }
+
+    // Determine which player is which in the updated room
+    const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
+    const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
+
+    if (currentState.status === 'waiting') {
+      // Opponent joined — transition from waiting to ready
+      if (opponent) {
+        setRoomState({
+          status: 'ready',
+          room: updatedRoom,
+          player,
+          opponent,
+        });
+      }
+    } else if (currentState.status === 'ready') {
+      // Existing player: update room state (e.g., new move)
       setRoomState({
         status: 'ready',
         room: updatedRoom,
         player,
-        opponent: opponent!
+        opponent: opponent!,
       });
     }
   }, [roomState]);
 
-  // Setup realtime subscription (when ready and Supabase available)
+  // Setup realtime subscription (when Supabase available and player has joined)
   useEffect(() => {
     if (!supabaseAvailable || !roomId) {
       // Defer state update to avoid lint error
@@ -217,7 +235,8 @@ export default function RoomPage({ params }: RoomPageProps) {
       return () => cancelAnimationFrame(timeoutId);
     }
 
-    if (roomState.status !== 'ready') {
+    // Only subscribe when player has joined the room (waiting or ready)
+    if (roomState.status === 'loading' || roomState.status === 'error' || roomState.status === 'full') {
       return;
     }
 
