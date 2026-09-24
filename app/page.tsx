@@ -3,24 +3,29 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChessGame } from '@/components/chess/chess-game';
-import { createRoom } from '@/lib/rooms/services';
 import { getPlayerId } from '@/lib/rooms/services';
 
 export default function Home() {
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const router = useRouter();
 
-  const handleCreateRoom = useCallback(() => {
+  const handleCreateRoom = useCallback(async () => {
     setIsCreatingRoom(true);
 
     try {
-      // Get or create player ID
       const playerId = getPlayerId();
 
-      // Create room
-      const room = createRoom(playerId);
+      const response = await fetch('/api/rooms/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerId }),
+      });
 
-      // Navigate to room page
+      if (!response.ok) {
+        throw new Error('Failed to create room');
+      }
+
+      const { room } = await response.json();
       router.push(`/chess/room/${room.roomId}`);
     } catch (error) {
       console.error('Failed to create room:', error);

@@ -57,7 +57,10 @@ export async function POST(
 
     if (insertError) {
       console.error('Failed to persist room to Supabase:', insertError);
-      // Continue with local room - client will use localStorage
+      return NextResponse.json(
+        { error: 'Failed to create room' },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
