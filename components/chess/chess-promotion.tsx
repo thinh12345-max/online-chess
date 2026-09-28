@@ -1,6 +1,7 @@
 'use client';
 
-import type { PieceColor, PieceSymbol, PieceType } from '@/lib/chess/types';
+import type { PieceColor, PieceSymbol } from '@/lib/chess/types';
+import { ChessPiece } from './chess-piece-svg';
 import { PIECE_SYMBOLS } from '@/lib/chess/types';
 
 interface ChessPromotionProps {
@@ -11,45 +12,47 @@ interface ChessPromotionProps {
 
 const PROMOTION_PIECES: PieceSymbol[] = ['q', 'r', 'b', 'n'];
 
-const PIECE_TYPE_LABELS: Record<PieceSymbol, PieceType> = {
+const PIECE_TYPE_MAP: Record<string, 'queen' | 'rook' | 'bishop' | 'knight'> = {
   q: 'queen',
   r: 'rook',
   b: 'bishop',
   n: 'knight',
-  p: 'pawn',
-  k: 'king',
 };
 
 export function ChessPromotion({ color, onSelect, onCancel }: ChessPromotionProps) {
-
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
-      <div className="bg-background rounded-lg shadow-xl p-4 flex flex-col gap-2">
-        <p className="text-sm text-center text-muted-foreground mb-2">
-          Choose promotion
+    <div className="absolute inset-0 flex items-center justify-center z-50" style={{ background: 'rgba(0,0,0,0.5)' }}>
+      <div className="flex flex-col items-center gap-2 p-3" style={{ background: '#fafaf8', borderRadius: '6px', boxShadow: '0 8px 24px rgba(74,58,40,0.25)' }}>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-[#9a9080] mb-1">
+          Promote to
         </p>
-        <div className="flex gap-2">
-          {PROMOTION_PIECES.map((piece) => (
+        <div className="flex gap-1">
+          {PROMOTION_PIECES.map((symbol) => (
             <button
-              key={piece}
+              key={symbol}
               type="button"
-              onClick={() => onSelect(piece)}
-              className={`
-                w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center
-                text-3xl sm:text-4xl rounded-lg
-                bg-card hover:bg-accent transition-colors
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-ring
-              `}
-              aria-label={`Promote to ${PIECE_TYPE_LABELS[piece]}`}
+              onClick={() => onSelect(symbol)}
+              className="w-12 h-12 flex items-center justify-center rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+              style={{ background: '#f0ede8' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#e8e0d4'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = '#f0ede8'; }}
+              aria-label={`Promote to ${PIECE_TYPE_MAP[symbol]}`}
             >
-              {PIECE_SYMBOLS[color][PIECE_TYPE_LABELS[piece]]}
+              <ChessPiece
+                piece={{
+                  type: PIECE_TYPE_MAP[symbol],
+                  color,
+                  symbol: PIECE_SYMBOLS[color][PIECE_TYPE_MAP[symbol]],
+                }}
+                squareLight={true}
+              />
             </button>
           ))}
         </div>
         <button
           type="button"
           onClick={onCancel}
-          className="text-sm text-muted-foreground hover:text-foreground text-center mt-2 underline"
+          className="text-[11px] text-[#9a9080] hover:text-[#6a6050] transition-colors mt-1"
         >
           Cancel
         </button>

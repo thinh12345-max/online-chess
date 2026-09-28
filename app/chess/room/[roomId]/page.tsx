@@ -19,6 +19,7 @@ import { getPlayerId } from '@/lib/rooms/services';
 import { getRoom, joinRoom, applyMove } from '@/lib/rooms/services';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { OnlineChessGame } from '@/components/chess/chess-online-game';
+import { PlayerPanel, GameInfoPanel } from '@/components/chess';
 import type { Room, Player, ChessMovePayload } from '@/lib/rooms/types';
 
 interface RoomPageProps {
@@ -33,39 +34,15 @@ type RoomState =
   | { status: 'full'; room: Room }
   | { status: 'finished'; room: Room; player: Player };
 
-// Get game result text
 function getGameResultText(status: string): string {
   switch (status) {
-    case 'checkmate':
-      return 'Checkmate!';
-    case 'stalemate':
-      return 'Stalemate - Draw';
-    case 'draw-insufficient-material':
-      return 'Draw - Insufficient Material';
-    case 'draw-threefold-repetition':
-      return 'Draw - Threefold Repetition';
-    case 'draw-fifty-move':
-      return 'Draw - Fifty Move Rule';
-    case 'draw':
-      return 'Draw';
-    default:
-      return 'Game Over';
-  }
-}
-
-// Get status display text
-function getStatusText(status: string): string {
-  switch (status) {
-    case 'check':
-      return 'Check!';
-    case 'checkmate':
-      return 'Checkmate!';
-    case 'stalemate':
-      return 'Stalemate';
-    case 'draw':
-      return 'Draw';
-    default:
-      return '';
+    case 'checkmate': return 'Checkmate!';
+    case 'stalemate': return 'Stalemate — Draw';
+    case 'draw-insufficient-material': return 'Draw — Insufficient Material';
+    case 'draw-threefold-repetition': return 'Draw — Threefold Repetition';
+    case 'draw-fifty-move': return 'Draw — Fifty Move Rule';
+    case 'draw': return 'Draw';
+    default: return 'Game Over';
   }
 }
 
@@ -78,21 +55,14 @@ export default function RoomPage({ params }: RoomPageProps) {
   const router = useRouter();
   const realtimeRef = useRef<(() => void) | null>(null);
 
-  // Check if Supabase is configured
   const supabaseAvailable = isSupabaseConfigured();
 
-  // Resolve params
   useEffect(() => {
     params.then((p) => setRoomId(p.roomId));
   }, [params]);
 
-  // Fetch room data from server/API
   const fetchRoom = useCallback(async (rid: string): Promise<Room | null> => {
-    if (!supabaseAvailable) {
-      // Fallback to localStorage
-      return getRoom(rid);
-    }
-
+    if (!supabaseAvailable) return getRoom(rid);
     try {
       const response = await fetch(`/api/rooms/${rid}`);
       if (!response.ok) {
@@ -102,19 +72,15 @@ export default function RoomPage({ params }: RoomPageProps) {
       const data = await response.json();
       return data.room;
     } catch {
-      // Fallback to localStorage
       return getRoom(rid);
     }
   }, [supabaseAvailable]);
 
-  // Join room on server
-  const joinRoomOnServer = useCallback(async (rid: string, playerId: string): Promise<{ success: boolean; room?: Room; error?: string }> => {
+  const joinRoomOnServer = useCallback(async (rid: string, playerId: string) => {
     if (!supabaseAvailable) {
-      // Fallback to localStorage
       const result = joinRoom(rid, playerId);
       return { success: result.success, room: result.success ? result.room : undefined, error: result.success ? undefined : result.error };
     }
-
     try {
       const response = await fetch(`/api/rooms/${rid}/join`, {
         method: 'POST',
@@ -128,7 +94,6 @@ export default function RoomPage({ params }: RoomPageProps) {
     }
   }, [supabaseAvailable]);
 
-  // Load room data
   useEffect(() => {
     if (!roomId) return;
 
@@ -141,7 +106,6 @@ export default function RoomPage({ params }: RoomPageProps) {
         return;
       }
 
-      // Determine player's state in the room
       const isWhite = room.playerWhite?.playerId === playerId;
       const isBlack = room.playerBlack?.playerId === playerId;
       const isPlayer = isWhite || isBlack;
@@ -152,14 +116,13 @@ export default function RoomPage({ params }: RoomPageProps) {
         } else if (isBlack) {
           setRoomState({ status: 'ready', room, player: room.playerBlack!, opponent: room.playerWhite! });
         } else {
-          // New player joining - attempt to join
           const result = await joinRoomOnServer(roomId, playerId);
           if (result.success && result.room) {
             setRoomState({
               status: 'ready',
               room: result.room,
               player: result.room.playerBlack!,
-              opponent: result.room.playerWhite!
+              opponent: result.room.playerWhite!,
             });
           } else {
             setRoomState({ status: 'error', error: result.error || 'Unable to join room' });
@@ -186,13 +149,9 @@ export default function RoomPage({ params }: RoomPageProps) {
     loadRoomData();
   }, [roomId, refreshKey, fetchRoom, joinRoomOnServer]);
 
-  // Handle realtime state updates
   const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
     const currentState = roomState;
-
-    // Guard: must have a player assigned (waiting or ready)
     if (!('player' in currentState)) return;
-
     const { player } = currentState;
 
     if (updatedRoom.status === 'finished') {
@@ -200,57 +159,36 @@ export default function RoomPage({ params }: RoomPageProps) {
       return;
     }
 
-    // Determine which player is which in the updated room
     const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
     const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
 
     if (currentState.status === 'waiting') {
-      // Opponent joined — transition from waiting to ready
       if (opponent) {
-        setRoomState({
-          status: 'ready',
-          room: updatedRoom,
-          player,
-          opponent,
-        });
+        setRoomState({ status: 'ready', room: updatedRoom, player, opponent });
       }
     } else if (currentState.status === 'ready') {
-      // Existing player: update room state (e.g., new move)
-      setRoomState({
-        status: 'ready',
-        room: updatedRoom,
-        player,
-        opponent: opponent!,
-      });
+      setRoomState({ status: 'ready', room: updatedRoom, player, opponent: opponent! });
     }
   }, [roomState]);
 
-  // Setup realtime subscription (when Supabase available and player has joined)
   useEffect(() => {
     if (!supabaseAvailable || !roomId) {
-      // Defer state update to avoid lint error
       const timeoutId = requestAnimationFrame(() => {
         setConnectionStatus('disconnected');
       });
       return () => cancelAnimationFrame(timeoutId);
     }
 
-    // Only subscribe when player has joined the room (waiting or ready)
-    if (roomState.status === 'loading' || roomState.status === 'error' || roomState.status === 'full') {
-      return;
-    }
+    if (roomState.status === 'loading' || roomState.status === 'error' || roomState.status === 'full') return;
 
-    // Clean up previous subscription
     if (realtimeRef.current) {
       realtimeRef.current();
       realtimeRef.current = null;
     }
 
-    // Dynamic import Supabase to avoid SSR issues
     import('@/lib/supabase').then(({ getSupabaseClient }) => {
       try {
         const supabase = getSupabaseClient();
-
         const channel = supabase
           .channel(`room:${roomId}`)
           .on(
@@ -264,24 +202,16 @@ export default function RoomPage({ params }: RoomPageProps) {
             async (payload) => {
               if (payload.eventType === 'UPDATE' && payload.new) {
                 const updatedRoom = await fetchRoom(roomId);
-                if (updatedRoom) {
-                  handleRealtimeUpdate(updatedRoom);
-                }
+                if (updatedRoom) handleRealtimeUpdate(updatedRoom);
               }
             }
           )
           .subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              setConnectionStatus('connected');
-            } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-              setConnectionStatus('disconnected');
-            }
+            if (status === 'SUBSCRIBED') setConnectionStatus('connected');
+            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnectionStatus('disconnected');
           });
 
-        realtimeRef.current = () => {
-          supabase.removeChannel(channel);
-        };
-
+        realtimeRef.current = () => { supabase.removeChannel(channel); };
         setConnectionStatus('connected');
       } catch {
         setConnectionStatus('disconnected');
@@ -289,26 +219,17 @@ export default function RoomPage({ params }: RoomPageProps) {
     });
 
     return () => {
-      if (realtimeRef.current) {
-        realtimeRef.current();
-        realtimeRef.current = null;
-      }
+      if (realtimeRef.current) { realtimeRef.current(); realtimeRef.current = null; }
     };
   }, [roomId, roomState.status, supabaseAvailable, fetchRoom, handleRealtimeUpdate]);
 
-  // Handle move submission
   const handleMove = useCallback(async (payload: ChessMovePayload) => {
     if (!roomId) return;
-
     const playerId = getPlayerId();
 
     if (!supabaseAvailable) {
-      // Fallback to localStorage - direct move application
       const result = applyMove(roomId, playerId, payload);
-      if (!result.success) {
-        console.error('Move failed:', result.error);
-      }
-      // Trigger refresh to update UI
+      if (!result.success) console.error('Move failed:', result.error);
       setRefreshKey((k) => k + 1);
       return;
     }
@@ -319,26 +240,17 @@ export default function RoomPage({ params }: RoomPageProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ playerId, ...payload }),
       });
-
       const data = await response.json();
-
-      if (!data.success) {
-        console.error('Move failed:', data.error);
-        // Trigger refresh to show correct state
-        setRefreshKey((k) => k + 1);
-      }
-      // Success will be handled by realtime subscription
+      if (!data.success) console.error('Move failed:', data.error);
+      setRefreshKey((k) => k + 1);
     } catch (error) {
       console.error('Move request failed:', error);
     }
   }, [roomId, supabaseAvailable]);
 
-  // Copy invite link
   const handleCopyLink = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
       const textArea = document.createElement('textarea');
       textArea.value = window.location.href;
@@ -346,54 +258,47 @@ export default function RoomPage({ params }: RoomPageProps) {
       textArea.select();
       document.execCommand('copy');
       document.body.removeChild(textArea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, []);
 
-  // Go back home
   const handleGoHome = useCallback(() => {
-    if (realtimeRef.current) {
-      realtimeRef.current();
-    }
+    if (realtimeRef.current) realtimeRef.current();
     router.push('/');
   }, [router]);
 
-  // Refresh room data
-  const handleRefresh = useCallback(() => {
-    setRefreshKey((k) => k + 1);
-  }, []);
-
-  // Loading state
+  // Loading
   if (roomState.status === 'loading') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center" style={{ background: '#f5f4f0' }}>
         <div className="text-center">
-          <div className="text-4xl mb-4">♟️</div>
-          <p className="text-lg text-muted-foreground">Loading room...</p>
+          <div className="mb-4">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" className="mx-auto text-[#b0a898] animate-pulse">
+              <path d="M12 2C11 2 10 2.5 10 3.5V5H14V3.5C14 2.5 13 2 12 2Z" fill="currentColor" />
+              <path d="M9 5H15V8L17 10V20C17 21 16 22 15 22H9C8 22 7 21 7 20V10L9 8V5Z" fill="currentColor" />
+            </svg>
+          </div>
+          <p className="text-sm text-[#9a9080]">Loading game...</p>
         </div>
       </div>
     );
   }
 
-  // Error state
+  // Error
   if (roomState.status === 'error') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="text-center max-w-md">
-          <div className="text-6xl mb-4">❌</div>
-          <h1 className="text-2xl font-bold mb-2">Error</h1>
-          <p className="text-muted-foreground mb-6">{roomState.error}</p>
-          {!supabaseAvailable && (
-            <p className="text-xs text-yellow-600 mb-4">
-              ⚠️ Supabase not configured. Using localStorage (same browser only).
-            </p>
-          )}
+      <div className="min-h-screen flex flex-col items-center justify-center p-4" style={{ background: '#f5f4f0' }}>
+        <div className="text-center max-w-sm">
+          <div className="text-5xl mb-4" aria-hidden="true">&#x2716;</div>
+          <h1 className="text-xl font-bold mb-2 text-[#4a4538]">Room not found</h1>
+          <p className="text-sm text-[#9a9080] mb-6">{roomState.error}</p>
           <button
             onClick={handleGoHome}
-            className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            className="px-6 py-2.5 rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            style={{ background: '#4a4538', color: '#fafaf8' }}
           >
-            Go to Home
+            Back to home
           </button>
         </div>
       </div>
@@ -402,90 +307,265 @@ export default function RoomPage({ params }: RoomPageProps) {
 
   const room = 'room' in roomState ? roomState.room : null;
 
-  // Full state
+  // Room full
   if (roomState.status === 'full' && room) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="text-center max-w-md">
-          <div className="text-6xl mb-4">🚫</div>
-          <h1 className="text-2xl font-bold mb-2">Room Full</h1>
-          <p className="text-muted-foreground mb-2">
-            Room: <code className="bg-muted px-2 py-1 rounded">{room.roomId.slice(0, 8)}</code>
+      <div className="min-h-screen flex flex-col items-center justify-center p-4" style={{ background: '#f5f4f0' }}>
+        <div className="text-center max-w-sm">
+          <div className="text-5xl mb-4" aria-hidden="true">&#x1F6AB;</div>
+          <h1 className="text-xl font-bold mb-2 text-[#4a4538]">Room Full</h1>
+          <p className="text-sm text-[#9a9080] mb-2">
+            Room: <code className="px-2 py-0.5 rounded text-xs" style={{ background: '#e8e4dc', color: '#6a6050' }}>{room.roomId.slice(0, 8)}</code>
           </p>
-          <p className="text-muted-foreground mb-6">
-            This game already has two players.
-          </p>
-          {!supabaseAvailable && (
-            <p className="text-xs text-yellow-600 mb-4">
-              ⚠️ Supabase not configured. Using localStorage.
-            </p>
-          )}
+          <p className="text-sm text-[#9a9080] mb-6">This game already has two players.</p>
           <button
             onClick={handleGoHome}
-            className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            className="px-6 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            style={{ background: '#4a4538', color: '#fafaf8' }}
           >
-            Go to Home
+            Back to home
           </button>
         </div>
       </div>
     );
   }
 
-  // Waiting state
+  // Waiting for opponent
   if (roomState.status === 'waiting' && room) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="text-center max-w-md">
-          <div className="text-6xl mb-4">⏳</div>
-          <h1 className="text-2xl font-bold mb-2">Waiting for Opponent</h1>
-          <p className="text-muted-foreground mb-2">
-            Room: <code className="bg-muted px-2 py-1 rounded">{room.roomId.slice(0, 8)}</code>
-          </p>
-          <div className="bg-muted rounded-lg p-4 mb-6">
-            <p className="text-sm font-medium mb-2">You are playing as:</p>
-            <p className="text-2xl font-bold text-white">White</p>
+      <div className="min-h-screen flex flex-col" style={{ background: '#f5f4f0' }}>
+        {/* Header */}
+        <header className="w-full shrink-0" style={{ borderBottom: '1px solid #e0ddd8', background: '#fafaf8' }}>
+          <div className="max-w-[1120px] mx-auto px-4 sm:px-6">
+            <div className="flex h-12 items-center justify-between">
+              <button
+                onClick={handleGoHome}
+                className="flex items-center gap-1.5 text-[#6a6050] hover:text-[#4a4538] transition-colors"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+                <span className="text-sm font-medium">Online Chess</span>
+              </button>
+              <div className="flex items-center gap-2">
+                <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500' : connectionStatus === 'connecting' ? 'bg-yellow-400' : 'bg-red-400'}`} />
+                <span className="text-[11px] text-[#9a9080]">
+                  {connectionStatus === 'connected' ? 'Online' : connectionStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+                </span>
+              </div>
+            </div>
           </div>
+        </header>
 
-          {/* Connection status */}
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <span className={`w-2 h-2 rounded-full ${
-              connectionStatus === 'connected' ? 'bg-green-500' :
-              connectionStatus === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
-            }`} />
-            <span className="text-sm text-muted-foreground">
-              {connectionStatus === 'connected' ? 'Connected' :
-               connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
-            </span>
-          </div>
+        {/* Board + sidebar workspace — board visible, player info shown */}
+        <main className="flex-1 flex items-start justify-center py-5 sm:py-8">
+          <div className="w-full max-w-[1120px] px-4 sm:px-6">
 
-          <p className="text-sm text-muted-foreground mb-4">
-            Share this link with your opponent:
-          </p>
-          <div className="flex gap-2 justify-center mb-6">
-            <code className="bg-muted px-3 py-2 rounded text-sm break-all">
-              {window.location.href}
-            </code>
+            {/* Desktop: board center-left, info right */}
+            <div className="hidden md:grid gap-8 items-start" style={{ gridTemplateColumns: '1fr 280px' }}>
+
+              {/* Left: player panels + board */}
+              <div className="flex flex-col items-center gap-2">
+
+                {/* Waiting player info */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <PlayerPanel
+                    label={room.playerWhite?.color === 'white' ? 'White' : 'Black'}
+                    color={room.playerWhite?.color ?? 'white'}
+                    isYou={true}
+                    isYourTurn={true}
+                  />
+                </div>
+
+                {/* Board — always visible */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <OnlineChessGame
+                    gameState={room.gameState}
+                    playerColor={room.playerWhite?.color ?? 'white'}
+                    onMove={handleMove}
+                    isPlayerTurn={false}
+                    isGameOver={false}
+                  />
+                </div>
+
+                {/* Opponent slot (empty, waiting) */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <PlayerPanel
+                    label="Black"
+                    color="black"
+                    isYou={false}
+                    isYourTurn={false}
+                  />
+                </div>
+              </div>
+
+              {/* Right: info sidebar */}
+              <div className="flex flex-col gap-2 shrink-0">
+                {/* Waiting banner */}
+                <div
+                  className="px-3 py-2 text-center text-xs font-semibold"
+                  style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#4a4538' }}
+                >
+                  Waiting for opponent
+                </div>
+
+                <GameInfoPanel
+                  moveHistory={room.gameState.history}
+                  capturedPieces={room.gameState.capturedPieces}
+                />
+
+                {/* Invite link */}
+                <div
+                  className="px-3 py-2"
+                  style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px' }}
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#9a9080] mb-1.5">Invite link</p>
+                  <div className="rounded p-2 mb-2" style={{ background: '#f5f3ee' }}>
+                    <code className="text-[9px] break-all text-[#6a6050] select-all block">
+                      {typeof window !== 'undefined' ? window.location.href : ''}
+                    </code>
+                  </div>
+                  <button
+                    onClick={handleCopyLink}
+                    className="w-full px-3 py-1.5 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                    style={{ background: '#4a4538', color: '#fafaf8', borderRadius: '4px' }}
+                  >
+                    {copied ? '✓ Copied!' : 'Copy invite link'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Mobile: stacked */}
+            <div className="md:hidden flex flex-col items-center gap-2">
+
+              {/* Board */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <OnlineChessGame
+                  gameState={room.gameState}
+                  playerColor={room.playerWhite?.color ?? 'white'}
+                  onMove={handleMove}
+                  isPlayerTurn={false}
+                  isGameOver={false}
+                />
+              </div>
+
+              {/* Waiting player */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <PlayerPanel
+                  label={room.playerWhite?.color === 'white' ? 'White' : 'Black'}
+                  color={room.playerWhite?.color ?? 'white'}
+                  isYou={true}
+                  isYourTurn={true}
+                />
+              </div>
+
+              {/* Waiting banner */}
+              <div
+                className="w-full px-3 py-2 text-center text-xs font-semibold"
+                style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#4a4538', maxWidth: 'min(100%, 480px)' }}
+              >
+                Waiting for opponent
+              </div>
+
+              {/* Opponent slot */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <PlayerPanel
+                  label="Black"
+                  color="black"
+                  isYou={false}
+                  isYourTurn={false}
+                />
+              </div>
+
+              {/* Info panel */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <GameInfoPanel
+                  moveHistory={room.gameState.history}
+                  capturedPieces={room.gameState.capturedPieces}
+                />
+              </div>
+
+              {/* Invite link */}
+              <div
+                className="w-full px-3 py-2"
+                style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', maxWidth: 'min(100%, 480px)' }}
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#9a9080] mb-1.5">Invite link</p>
+                <div className="rounded p-2 mb-2" style={{ background: '#f5f3ee' }}>
+                  <code className="text-[9px] break-all text-[#6a6050] select-all block">
+                    {typeof window !== 'undefined' ? window.location.href : ''}
+                  </code>
+                </div>
+                <button
+                  onClick={handleCopyLink}
+                  className="w-full px-3 py-1.5 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                  style={{ background: '#4a4538', color: '#fafaf8', borderRadius: '4px' }}
+                >
+                  {copied ? '✓ Copied!' : 'Copy invite link'}
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={handleCopyLink}
-              className="px-6 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors flex items-center gap-2 justify-center"
-            >
-              {copied ? '✓ Copied!' : '📋 Copy Invite Link'}
-            </button>
-            <button
-              onClick={handleRefresh}
-              className="px-6 py-2 bg-muted text-muted-foreground rounded-lg hover:bg-muted/80 transition-colors"
-            >
-              🔄 Refresh
-            </button>
-          </div>
-        </div>
+        </main>
       </div>
     );
   }
 
-  // Ready state - show chess game
+  // Finished
+  if (roomState.status === 'finished' && room) {
+    const player = roomState.player;
+    const winner = room.gameState.status === 'checkmate' ? (room.gameState.turn === 'w' ? 'black' : 'white') : null;
+
+    return (
+      <div className="min-h-screen flex flex-col" style={{ background: '#f5f4f0' }}>
+        <header className="w-full shrink-0" style={{ borderBottom: '1px solid #e0ddd8', background: '#fafaf8' }}>
+          <div className="max-w-[1120px] mx-auto px-4 sm:px-6">
+            <div className="flex h-12 items-center justify-between">
+              <button
+                onClick={handleGoHome}
+                className="flex items-center gap-1.5 text-[#6a6050] hover:text-[#4a4538] transition-colors"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+                <span className="text-sm font-medium">Online Chess</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 flex flex-col items-center justify-center p-4">
+          <div
+            className="text-center max-w-xs w-full p-6"
+            style={{ background: '#fafaf8', border: '1px solid #e0ddd8', borderRadius: '4px' }}
+          >
+            <div className="mb-4">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" className="mx-auto text-[#b0a898]">
+                <path d="M12 2C11 2 10 2.5 10 3.5V5H14V3.5C14 2.5 13 2 12 2Z" fill="currentColor" />
+                <path d="M9 5H15V8L17 10V20C17 21 16 22 15 22H9C8 22 7 21 7 20V10L9 8V5Z" fill="currentColor" />
+              </svg>
+            </div>
+            <h1 className="text-sm font-semibold mb-1.5 text-[#4a4538]">Game Over</h1>
+            <p className="text-xs text-[#9a9080] mb-5">
+              {winner === player.color && 'You won!'}
+              {winner !== player.color && winner !== null && 'You lost'}
+              {winner === null && getGameResultText(room.gameState.status)}
+            </p>
+            <button
+              onClick={handleGoHome}
+              className="px-6 py-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+              style={{ background: '#4a4538', color: '#fafaf8', borderRadius: '4px' }}
+            >
+              Play again
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Ready — full game workspace
   if (roomState.status === 'ready' && room && 'player' in roomState && 'opponent' in roomState) {
     const { player, opponent } = roomState;
     const isYourTurn = (player.color === 'white' && room.gameState.turn === 'w') ||
@@ -494,91 +574,184 @@ export default function RoomPage({ params }: RoomPageProps) {
                        room.gameState.status === 'stalemate' ||
                        room.gameState.status.startsWith('draw');
 
+    const opponentLabel = opponent.color === 'white' ? 'White' : 'Black';
+
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="w-full max-w-6xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-4">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <span className={`w-2 h-2 rounded-full ${
-                connectionStatus === 'connected' ? 'bg-green-500' :
-                connectionStatus === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
-              }`} />
-              <span className="text-sm text-muted-foreground">
-                {connectionStatus === 'connected' ? 'Online' :
-                 connectionStatus === 'connecting' ? 'Connecting...' : 'Offline'}
-              </span>
+      <div className="min-h-screen flex flex-col" style={{ background: '#f5f4f0' }}>
+        {/* Header */}
+        <header
+          className="w-full shrink-0"
+          style={{ borderBottom: '1px solid #e0ddd8', background: '#fafaf8' }}
+        >
+          <div className="max-w-[1120px] mx-auto px-4 sm:px-6">
+            <div className="flex h-12 items-center justify-between">
+              {/* Back + title */}
+              <button
+                onClick={handleGoHome}
+                className="flex items-center gap-1.5 text-[#6a6050] hover:text-[#4a4538] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863] rounded"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+                <span className="text-sm font-medium">Online Chess</span>
+              </button>
+
+              {/* Right controls */}
+              <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500' : connectionStatus === 'connecting' ? 'bg-yellow-400' : 'bg-red-400'}`} />
+                  <span className="text-[11px] text-[#9a9080] hidden sm:block">
+                    {connectionStatus === 'connected' ? 'Online' : connectionStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+                  </span>
+                </div>
+                <button
+                  onClick={handleCopyLink}
+                  className="text-[11px] px-2.5 py-1 rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                  style={{
+                    borderColor: '#d4cfc8',
+                    background: '#fafaf8',
+                    color: '#6a6050',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#f0ede8'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#fafaf8'; }}
+                  title="Copy invite link"
+                >
+                  {copied ? '✓ Copied' : 'Invite'}
+                </button>
+              </div>
             </div>
-            <p className="text-sm">
-              You: <strong>{player.color === 'white' ? '⚪ White' : '⚫ Black'}</strong>
-              {' | '}
-              Opponent: <strong>{opponent.color === 'white' ? '⚪ White' : '⚫ Black'}</strong>
-            </p>
-            {getStatusText(room.gameState.status) && (
-              <p className={`text-lg font-semibold mt-1 ${
-                room.gameState.status === 'check' ? 'text-red-500' : ''
-              }`}>
-                {getStatusText(room.gameState.status)}
-              </p>
-            )}
           </div>
+        </header>
 
-          {/* Chess Game */}
-          <OnlineChessGame
-            gameState={room.gameState}
-            playerColor={player.color}
-            onMove={handleMove}
-            isPlayerTurn={isYourTurn}
-            isGameOver={isGameOver}
-          />
+        {/* Game workspace */}
+        <main className="flex-1 flex items-start justify-center py-5 sm:py-8">
+          <div className="w-full max-w-[1120px] px-4 sm:px-6">
 
-          {/* Back button */}
-          <div className="text-center mt-4">
-            <button
-              onClick={handleGoHome}
-              className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              ← Leave Game
-            </button>
+            {/* Desktop: board center-left, info right */}
+            <div className="hidden md:grid gap-8 items-start" style={{ gridTemplateColumns: '1fr 280px' }}>
+
+              {/* Left: player panels + board */}
+              <div className="flex flex-col items-center gap-2">
+                {/* Opponent */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <PlayerPanel
+                    label={opponentLabel}
+                    color={opponent.color}
+                    isYou={false}
+                    isYourTurn={!isYourTurn && !isGameOver}
+                  />
+                </div>
+
+                {/* Board */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <OnlineChessGame
+                    gameState={room.gameState}
+                    playerColor={player.color}
+                    onMove={handleMove}
+                    isPlayerTurn={isYourTurn}
+                    isGameOver={isGameOver}
+                  />
+                </div>
+
+                {/* Player */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <PlayerPanel
+                    label={player.color === 'white' ? 'White' : 'Black'}
+                    color={player.color}
+                    isYou={true}
+                    isYourTurn={isYourTurn && !isGameOver}
+                  />
+                </div>
+              </div>
+
+              {/* Right: info sidebar */}
+              <div className="flex flex-col gap-2 shrink-0">
+                {/* Status */}
+                {isGameOver && (
+                  <div
+                    className="px-3 py-2 text-center text-xs font-semibold"
+                    style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#4a4538' }}
+                  >
+                    {getGameResultText(room.gameState.status)}
+                  </div>
+                )}
+                {!isGameOver && room.gameState.status === 'check' && (
+                  <div
+                    className="px-3 py-2 text-center text-xs font-semibold"
+                    style={{ background: '#fdf3f3', border: '1px solid #e8c8c8', borderRadius: '4px', color: '#b84040' }}
+                  >
+                    Check!
+                  </div>
+                )}
+
+                <GameInfoPanel
+                  moveHistory={room.gameState.history}
+                  capturedPieces={room.gameState.capturedPieces}
+                />
+              </div>
+            </div>
+
+            {/* Mobile: stacked, board first */}
+            <div className="md:hidden flex flex-col items-center gap-2">
+              {/* Opponent */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <PlayerPanel
+                  label={opponentLabel}
+                  color={opponent.color}
+                  isYou={false}
+                  isYourTurn={!isYourTurn && !isGameOver}
+                />
+              </div>
+
+              {/* Board */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <OnlineChessGame
+                  gameState={room.gameState}
+                  playerColor={player.color}
+                  onMove={handleMove}
+                  isPlayerTurn={isYourTurn}
+                  isGameOver={isGameOver}
+                />
+              </div>
+
+              {/* Player */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <PlayerPanel
+                  label={player.color === 'white' ? 'White' : 'Black'}
+                  color={player.color}
+                  isYou={true}
+                  isYourTurn={isYourTurn && !isGameOver}
+                />
+              </div>
+
+              {/* Status */}
+              {isGameOver && (
+                <div
+                  className="w-full px-3 py-2 text-center text-xs font-semibold"
+                  style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#4a4538', maxWidth: 'min(100%, 480px)' }}
+                >
+                  {getGameResultText(room.gameState.status)}
+                </div>
+              )}
+              {!isGameOver && room.gameState.status === 'check' && (
+                <div
+                  className="w-full px-3 py-2 text-center text-xs font-semibold"
+                  style={{ background: '#fdf3f3', border: '1px solid #e8c8c8', borderRadius: '4px', color: '#b84040', maxWidth: 'min(100%, 480px)' }}
+                >
+                  Check!
+                </div>
+              )}
+
+              {/* Info panel */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <GameInfoPanel
+                  moveHistory={room.gameState.history}
+                  capturedPieces={room.gameState.capturedPieces}
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Finished state
-  if (roomState.status === 'finished' && room) {
-    const player = roomState.player;
-    const winner = room.gameState.status === 'checkmate'
-      ? (room.gameState.turn === 'w' ? 'black' : 'white')
-      : null;
-
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="text-center max-w-md">
-          <div className="text-6xl mb-4">
-            {winner === player.color ? '🏆' : '🏁'}
-          </div>
-          <h1 className="text-2xl font-bold mb-2">Game Over</h1>
-          <p className="text-muted-foreground mb-4">
-            Room: <code className="bg-muted px-2 py-1 rounded">{room.roomId.slice(0, 8)}</code>
-          </p>
-
-          <div className="bg-muted rounded-lg p-4 mb-6">
-            <p className="text-lg">
-              {winner === player.color && 'You won!'}
-              {winner !== player.color && winner !== null && 'You lost'}
-              {winner === null && getGameResultText(room.gameState.status)}
-            </p>
-          </div>
-
-          <button
-            onClick={handleGoHome}
-            className="px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-          >
-            Play Again
-          </button>
-        </div>
+        </main>
       </div>
     );
   }

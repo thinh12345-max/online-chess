@@ -1,10 +1,13 @@
+'use client';
+
 import type { Piece } from '@/lib/chess/types';
 
 interface ChessPieceProps {
   piece: Piece;
+  /** Accepted for API compatibility — unused by the simple text renderer. */
+  squareLight?: boolean;
 }
 
-/** Used by the local (non-multiplayer) chess game */
 export function ChessPiece({ piece }: ChessPieceProps) {
   return (
     <span
