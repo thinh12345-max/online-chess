@@ -36,6 +36,8 @@ import {
   isValidFen,
   // Serializable state
   createSerializableState,
+  // Synchronization
+  shouldAcceptRoomUpdate,
 } from './room';
 import { Chess } from 'chess.js';
 import type { ChessMovePayload } from './types';
@@ -769,3 +771,110 @@ describe('applyResignation', () => {
     }
   });
 });
+
+// ============================================================================
+// Synchronization — Version-Aware Room Update Acceptance
+// ============================================================================
+
+/** Minimal Room fixture for version comparison tests. */
+function makeRoom(overrides: Partial<{ roomId: string; version: number; status: string; gameState: Record<string, unknown> }> = {}): import('./types').Room {
+  return {
+    roomId: 'test-room-0001',
+    version: 0,
+    status: 'active',
+    gameState: {
+      fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      turn: 'w',
+      status: 'playing',
+      history: [],
+      lastMove: null,
+      capturedPieces: { white: [], black: [] },
+    },
+    playerWhite: { playerId: WHITE_ID, color: 'white', joinedAt: new Date('2025-01-01T00:00:00.000Z') },
+    playerBlack: { playerId: BLACK_ID, color: 'black', joinedAt: new Date('2025-01-01T00:00:00.000Z') },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  } as unknown as import('./types').Room;
+}
+
+describe('shouldAcceptRoomUpdate', () => {
+  it('accepts first load (current is null)', () => {
+    const incoming = makeRoom({ version: 0 });
+    expect(shouldAcceptRoomUpdate(null, incoming)).toBe(true);
+  });
+
+  it('accepts when incoming version is greater than current', () => {
+    const current = makeRoom({ version: 3 });
+    const incoming = makeRoom({ version: 4 });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(true);
+  });
+
+  it('rejects when incoming version equals current', () => {
+    const current = makeRoom({ version: 5 });
+    const incoming = makeRoom({ version: 5 });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(false);
+  });
+
+  it('rejects when incoming version is older than current', () => {
+    const current = makeRoom({ version: 7 });
+    const incoming = makeRoom({ version: 6 });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(false);
+  });
+
+  it('rejects stale update even if gameState content differs', () => {
+    // Incoming has a different move but older version — must still reject
+    const current = makeRoom({ version: 3 });
+    const incoming = makeRoom({
+      version: 2,
+      gameState: {
+        fen: 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1',
+        turn: 'b',
+        status: 'playing',
+        history: [{ from: 'e2', to: 'e4' }],
+        lastMove: { from: 'e2', to: 'e4' },
+        capturedPieces: { white: [], black: [] },
+      },
+    });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(false);
+  });
+
+  it('accepts newer state regardless of gameState content', () => {
+    // Incoming has more moves and higher version
+    const current = makeRoom({ version: 1 });
+    const incoming = makeRoom({
+      version: 2,
+      gameState: {
+        fen: 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2',
+        turn: 'w',
+        status: 'playing',
+        history: [
+          { from: 'e2', to: 'e4' },
+          { from: 'e7', to: 'e5' },
+        ],
+        lastMove: { from: 'e7', to: 'e5' },
+        capturedPieces: { white: [], black: [] },
+      },
+    });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(true);
+  });
+
+  it('handles large version gaps', () => {
+    const current = makeRoom({ version: 50 });
+    const incoming = makeRoom({ version: 100 });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(true);
+  });
+
+  it('terminus condition: version 0 current, version 0 incoming (equal)', () => {
+    const current = makeRoom({ version: 0 });
+    const incoming = makeRoom({ version: 0 });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(false);
+  });
+
+  it('terminus condition: version 0 current, positive incoming (accept)', () => {
+    const current = makeRoom({ version: 0 });
+    const incoming = makeRoom({ version: 1 });
+    expect(shouldAcceptRoomUpdate(current, incoming)).toBe(true);
+  });
+});
+

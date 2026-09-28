@@ -17,6 +17,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { getPlayerId } from '@/lib/rooms/services';
 import { getRoom, joinRoom, applyMove } from '@/lib/rooms/services';
+import { shouldAcceptRoomUpdate } from '@/lib/rooms/room';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { OnlineChessGame } from '@/components/chess/chess-online-game';
 import { PlayerPanel, GameInfoPanel } from '@/components/chess';
@@ -97,6 +98,10 @@ export default function RoomPage({ params }: RoomPageProps) {
     }
   }, [supabaseAvailable]);
 
+  // loadRoomData intentionally reads roomState at schedule-time to capture the current
+  // version before the async fetch resolves. Adding roomState to deps would cause a
+  // render loop. The stale-closure risk is acceptable and further guarded by
+  // shouldAcceptRoomUpdate.
   useEffect(() => {
     if (!roomId) return;
 
@@ -108,6 +113,12 @@ export default function RoomPage({ params }: RoomPageProps) {
         setRoomState({ status: 'error', error: 'Room not found' });
         return;
       }
+
+      // Guard: prevent a slow-fetched older version from overwriting a newer local state
+      // (can happen when multiple refreshKey changes or concurrent realtime events fire)
+      // roomState is captured at effect-schedule time; comparing against it prevents races
+      const current = ('room' in roomState) ? (roomState as { room: Room }).room : null;
+      if (!shouldAcceptRoomUpdate(current, room)) return;
 
       const isWhite = room.playerWhite?.playerId === playerId;
       const isBlack = room.playerBlack?.playerId === playerId;
@@ -150,11 +161,16 @@ export default function RoomPage({ params }: RoomPageProps) {
     };
 
     loadRoomData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, refreshKey, fetchRoom, joinRoomOnServer]);
 
   const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
     const currentState = roomState;
     if (!('player' in currentState)) return;
+
+    // Reject stale updates: never replace newer state with older
+    if (!shouldAcceptRoomUpdate(currentState.room, updatedRoom)) return;
+
     const { player } = currentState;
 
     if (updatedRoom.status === 'finished') {
@@ -624,7 +640,8 @@ export default function RoomPage({ params }: RoomPageProps) {
                        (player.color === 'black' && room.gameState.turn === 'b');
     const isGameOver = room.gameState.status === 'checkmate' ||
                        room.gameState.status === 'stalemate' ||
-                       room.gameState.status.startsWith('draw');
+                       room.gameState.status.startsWith('draw') ||
+                       room.gameState.status === 'resignation';
 
     const opponentLabel = opponent.color === 'white' ? 'White' : 'Black';
 

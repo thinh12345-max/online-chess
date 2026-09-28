@@ -25,6 +25,29 @@ import type {
 } from './types';
 
 // ============================================================================
+// Room Version Comparison
+// ============================================================================
+
+/**
+ * Determines whether an incoming room update should replace the current client state.
+ * Uses version comparison to prevent stale updates from overwriting newer state.
+ *
+ * @param current - the client's current room state (may be null during initial load)
+ * @param incoming - the room fetched from the server (realtime or refresh)
+ * @returns true if the incoming room should be accepted; false to reject as stale
+ */
+export function shouldAcceptRoomUpdate(
+  current: Room | null,
+  incoming: Room
+): boolean {
+  // Always accept the first load (no current state to protect)
+  if (current === null) return true;
+  // Reject if incoming version is older or equal
+  if (incoming.version <= current.version) return false;
+  return true;
+}
+
+// ============================================================================
 // Room ID Generation
 // ============================================================================
 
