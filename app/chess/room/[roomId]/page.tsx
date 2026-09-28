@@ -53,6 +53,7 @@ export default function RoomPage({ params }: RoomPageProps) {
   const [copied, setCopied] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [resigning, setResigning] = useState(false);
+  const [conflictBanner, setConflictBanner] = useState<'move' | 'resign' | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const router = useRouter();
   const realtimeRef = useRef<(() => void) | null>(null);
@@ -243,6 +244,11 @@ export default function RoomPage({ params }: RoomPageProps) {
         body: JSON.stringify({ playerId, ...payload }),
       });
       const data = await response.json();
+      if (response.status === 409) {
+        setConflictBanner('move');
+        setRefreshKey((k) => k + 1);
+        return;
+      }
       if (!data.success) console.error('Move failed:', data.error);
       setRefreshKey((k) => k + 1);
     } catch (error) {
@@ -295,6 +301,11 @@ export default function RoomPage({ params }: RoomPageProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ playerId }),
       });
+      if (response.status === 409) {
+        setConflictBanner('resign');
+        setRefreshKey((k) => k + 1);
+        return;
+      }
       if (!response.ok) {
         console.error('Resign request failed:', response.status);
       }
@@ -725,6 +736,32 @@ export default function RoomPage({ params }: RoomPageProps) {
                   </div>
                 )}
 
+                {/* Optimistic-lock conflict banner */}
+                {conflictBanner !== null && (
+                  <div
+                    className="px-3 py-2 text-xs"
+                    style={{ background: '#fef3cd', border: '1px solid #e6c97a', borderRadius: '4px', color: '#7a5a10' }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span>
+                        {conflictBanner === 'move'
+                          ? 'The game changed on the other device. The board has been updated.'
+                          : 'The game ended on the other device.'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setConflictBanner(null)}
+                        className="shrink-0 mt-0.5 w-4 h-4 flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity focus:outline-none"
+                        aria-label="Dismiss"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                          <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <GameInfoPanel
                   moveHistory={room.gameState.history}
                   capturedPieces={room.gameState.capturedPieces}
@@ -800,6 +837,32 @@ export default function RoomPage({ params }: RoomPageProps) {
                   style={{ background: '#fdf3f3', border: '1px solid #e8c8c8', borderRadius: '4px', color: '#b84040', maxWidth: 'min(100%, 480px)' }}
                 >
                   Check!
+                </div>
+              )}
+
+              {/* Optimistic-lock conflict banner */}
+              {conflictBanner !== null && (
+                <div
+                  className="w-full px-3 py-2 text-xs"
+                  style={{ background: '#fef3cd', border: '1px solid #e6c97a', borderRadius: '4px', color: '#7a5a10', maxWidth: 'min(100%, 480px)' }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span>
+                      {conflictBanner === 'move'
+                        ? 'The game changed on the other device. The board has been updated.'
+                        : 'The game ended on the other device.'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setConflictBanner(null)}
+                      className="shrink-0 mt-0.5 w-4 h-4 flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity focus:outline-none"
+                      aria-label="Dismiss"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                        <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               )}
 
