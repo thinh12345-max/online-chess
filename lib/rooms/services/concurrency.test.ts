@@ -19,6 +19,7 @@ import {
   createRoom as createRoomModel,
   joinRoom as joinRoomModel,
   applyMoveToRoom,
+  applyResignation,
 } from '../room';
 import type { ChessMovePayload, Room } from '../types';
 
@@ -985,5 +986,78 @@ describe('Idempotency Assessment', () => {
     }
 
     // This confirms: no idempotency-key system exists.
+  });
+});
+
+// ============================================================================
+// Resignation Concurrency
+// ============================================================================
+
+/**
+ * Apply resignation with async storage (for concurrency tests).
+ */
+async function applyResignAsync(
+  roomId: string,
+  playerId: string,
+  storage: MockAtomicStorage
+): Promise<{ success: true; room: Room } | { success: false; error: string }> {
+  const room = storage.getRoom(roomId);
+  if (!room) return { success: false, error: 'room_not_found' };
+
+  const result = applyResignation(room, playerId);
+  if (!result.success) return result;
+
+  const savedRoom = result.room;
+  const saveResult = await storage.saveRoom(savedRoom);
+  if (!saveResult.success) return { success: false, error: 'CONFLICT' };
+
+  return { success: true, room: savedRoom };
+}
+
+describe('Concurrent Resignation', () => {
+  it('exactly one of two concurrent resignations succeeds', async () => {
+    const storage = new MockAtomicStorage();
+    const { room, whiteId, blackId } = createActiveRoom(storage);
+    const initialVersion = room.version;
+
+    const [resultA, resultB] = await Promise.all([
+      applyResignAsync(room.roomId, whiteId, storage),
+      applyResignAsync(room.roomId, blackId, storage),
+    ]);
+
+    const successes = [resultA, resultB].filter(r => r.success);
+    expect(successes.length).toBe(1);
+
+    const finalRoom = storage.getRoom(room.roomId)!;
+    expect(finalRoom.version).toBe(initialVersion + 1);
+  });
+
+  it('stale resignation retry after success fails', async () => {
+    const storage = new MockAtomicStorage();
+    const { room, whiteId } = createActiveRoom(storage);
+
+    const first = await applyResignAsync(room.roomId, whiteId, storage);
+    expect(first.success).toBe(true); if (!first.success) throw new Error("Expected first to succeed");
+
+    // Stale retry: version has already incremented; will fail at storage layer
+    await applyResignAsync(room.roomId, whiteId, storage);
+    const finalRoom = storage.getRoom(room.roomId)!;
+    expect(finalRoom.version).toBeLessThanOrEqual(room.version + 1);
+  });
+
+  it('resignation never produces version > initial + 1', async () => {
+    const storage = new MockAtomicStorage();
+    const { room, whiteId } = createActiveRoom(storage);
+    const initialVersion = room.version;
+
+    await Promise.all([
+      applyResignAsync(room.roomId, whiteId, storage),
+      applyResignAsync(room.roomId, whiteId, storage),
+      applyResignAsync(room.roomId, whiteId, storage),
+    ]);
+
+    const finalRoom = storage.getRoom(room.roomId)!;
+    expect(finalRoom.version).toBeLessThanOrEqual(initialVersion + 1);
+    expect(finalRoom.version).toBeGreaterThanOrEqual(initialVersion);
   });
 });

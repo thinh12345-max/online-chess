@@ -28,6 +28,7 @@ import {
   isValidMovePayload,
   validateMove,
   applyMoveToRoom,
+  applyResignation,
   // Serialization
   serializeRoom,
   deserializeRoom,
@@ -611,5 +612,160 @@ describe('Room Serialization', () => {
     expect(deserialized.gameState.turn).toBe(roomState.gameState.turn);
     // History has 1 entry: move 1 with e4 (white) and e5 (black)
     expect(deserialized.gameState.history.length).toBe(1);
+  });
+});
+
+// ============================================================================
+// Resignation
+// ============================================================================
+
+// Valid player IDs (16 hex characters)
+const WHITE_ID = '1234567890abcdef';
+const BLACK_ID = 'fedcba0987654321';
+
+describe('applyResignation', () => {
+  it('resignation succeeds for white player in active room', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    const result = applyResignation(joined.room, WHITE_ID);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.room.status).toBe('finished');
+    expect(result.room.gameState.status).toBe('resignation');
+  });
+
+  it('resignation succeeds for black player in active room', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    const result = applyResignation(joined.room, BLACK_ID);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.room.status).toBe('finished');
+    expect(result.room.gameState.status).toBe('resignation');
+  });
+
+  it('resignation leaves FEN unchanged', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    // Make a move first
+    const moved = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
+    if (!moved.success) throw new Error('Move failed');
+
+    const result = applyResignation(moved.room, BLACK_ID);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.room.gameState.fen).toBe(moved.room.gameState.fen);
+  });
+
+  it('resignation leaves turn unchanged', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    const result = applyResignation(joined.room, WHITE_ID);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.room.gameState.turn).toBe(joined.room.gameState.turn);
+  });
+
+  it('resignation increments version exactly once', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    const initialVersion = joined.room.version;
+
+    const result = applyResignation(joined.room, WHITE_ID);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.room.version).toBe(initialVersion + 1);
+  });
+
+  it('rejects non-player', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    const result = applyResignation(joined.room, '0000000000000000');
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('player_not_in_room');
+    }
+  });
+
+  it('rejects on finished room', () => {
+    const room = finishRoom(createRoom({ playerId: WHITE_ID }));
+    const result = applyResignation(room, WHITE_ID);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('game_not_active');
+    }
+  });
+
+  it('rejects on waiting room', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const result = applyResignation(room, WHITE_ID);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('game_not_active');
+    }
+  });
+
+  it('cannot resign twice', () => {
+    const room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+
+    const first = applyResignation(joined.room, WHITE_ID);
+    expect(first.success).toBe(true);
+    if (!first.success) return;
+
+    const second = applyResignation(first.room, WHITE_ID);
+    expect(second.success).toBe(false);
+    if (!second.success) {
+      expect(second.error).toBe('game_not_active');
+    }
+  });
+
+  it('cannot resign after checkmate', () => {
+    // Setup: scholar's mate
+    let room = createRoom({ playerId: WHITE_ID });
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: BLACK_ID });
+    if (!joined.success) throw new Error('Join failed');
+    room = joined.room;
+
+    const moves = [
+      { playerId: WHITE_ID, from: 'e2', to: 'e4' },
+      { playerId: BLACK_ID, from: 'e7', to: 'e5' },
+      { playerId: WHITE_ID, from: 'f1', to: 'c4' },
+      { playerId: BLACK_ID, from: 'b8', to: 'c6' },
+      { playerId: WHITE_ID, from: 'd1', to: 'h5' },
+      { playerId: BLACK_ID, from: 'c6', to: 'd4' },
+      { playerId: WHITE_ID, from: 'h5', to: 'f7' },
+    ];
+
+    for (const move of moves) {
+      const result = applyMoveToRoom(room, move.playerId, { from: move.from, to: move.to });
+      if (result.success) room = result.room;
+    }
+
+    expect(room.gameState.status).toBe('checkmate');
+
+    const result = applyResignation(room, WHITE_ID);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('game_not_active');
+    }
   });
 });

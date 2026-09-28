@@ -29,7 +29,8 @@ export type GameStatus =
   | 'draw-insufficient-material'
   | 'draw-threefold-repetition'
   | 'draw-fifty-move'
-  | 'draw';
+  | 'draw'
+  | 'resignation';
 
 export interface CapturedPieces {
   white: PieceSymbol[];

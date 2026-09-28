@@ -42,6 +42,7 @@ function getGameResultText(status: string): string {
     case 'draw-threefold-repetition': return 'Draw — Threefold Repetition';
     case 'draw-fifty-move': return 'Draw — Fifty Move Rule';
     case 'draw': return 'Draw';
+    case 'resignation': return 'Resignation';
     default: return 'Game Over';
   }
 }
@@ -51,6 +52,7 @@ export default function RoomPage({ params }: RoomPageProps) {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [resigning, setResigning] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const router = useRouter();
   const realtimeRef = useRef<(() => void) | null>(null);
@@ -267,6 +269,42 @@ export default function RoomPage({ params }: RoomPageProps) {
     if (realtimeRef.current) realtimeRef.current();
     router.push('/');
   }, [router]);
+
+  const handleResign = useCallback(async () => {
+    if (!roomId || resigning) return;
+    if (!confirm('Resign this game? You will lose.')) return;
+
+    const playerId = getPlayerId();
+    setResigning(true);
+
+    if (!supabaseAvailable) {
+      const { applyResignation } = await import('@/lib/rooms/room');
+      const room = 'room' in roomState ? roomState.room : null;
+      if (room) {
+        const result = applyResignation(room, playerId);
+        if (!result.success) console.error('Resign failed:', result.error);
+      }
+      setRefreshKey((k) => k + 1);
+      setResigning(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/rooms/${roomId}/resign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerId }),
+      });
+      if (!response.ok) {
+        console.error('Resign request failed:', response.status);
+      }
+      setRefreshKey((k) => k + 1);
+    } catch (error) {
+      console.error('Resign request failed:', error);
+    } finally {
+      setResigning(false);
+    }
+  }, [roomId, resigning, roomState, supabaseAvailable]);
 
   // Loading
   if (roomState.status === 'loading') {
@@ -515,7 +553,10 @@ export default function RoomPage({ params }: RoomPageProps) {
   // Finished
   if (roomState.status === 'finished' && room) {
     const player = roomState.player;
-    const winner = room.gameState.status === 'checkmate' ? (room.gameState.turn === 'w' ? 'black' : 'white') : null;
+    const isResignation = room.gameState.status === 'resignation';
+    const winner = room.gameState.status === 'checkmate' || isResignation
+      ? (room.gameState.turn === 'w' ? 'black' : 'white')
+      : null;
 
     return (
       <div className="min-h-screen flex flex-col" style={{ background: '#f5f4f0' }}>
@@ -688,6 +729,26 @@ export default function RoomPage({ params }: RoomPageProps) {
                   moveHistory={room.gameState.history}
                   capturedPieces={room.gameState.capturedPieces}
                 />
+
+                {/* Resign button */}
+                {!isGameOver && (
+                  <button
+                    type="button"
+                    onClick={handleResign}
+                    disabled={resigning}
+                    className="w-full px-3 py-2 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                    style={{
+                      background: resigning ? '#d4cfc8' : '#fafaf8',
+                      color: resigning ? '#9a9080' : '#6a6050',
+                      border: '1px solid #d4cfc8',
+                      borderRadius: '4px',
+                      cursor: resigning ? 'not-allowed' : 'pointer',
+                    }}
+                    title="Resign this game"
+                  >
+                    {resigning ? 'Resigning...' : 'Resign'}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -749,6 +810,27 @@ export default function RoomPage({ params }: RoomPageProps) {
                   capturedPieces={room.gameState.capturedPieces}
                 />
               </div>
+
+              {/* Resign button */}
+              {!isGameOver && (
+                <button
+                  type="button"
+                  onClick={handleResign}
+                  disabled={resigning}
+                  className="w-full px-3 py-2 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                  style={{
+                    background: resigning ? '#d4cfc8' : '#fafaf8',
+                    color: resigning ? '#9a9080' : '#6a6050',
+                    border: '1px solid #d4cfc8',
+                    borderRadius: '4px',
+                    cursor: resigning ? 'not-allowed' : 'pointer',
+                    maxWidth: 'min(100%, 480px)',
+                  }}
+                  title="Resign this game"
+                >
+                  {resigning ? 'Resigning...' : 'Resign'}
+                </button>
+              )}
             </div>
           </div>
         </main>

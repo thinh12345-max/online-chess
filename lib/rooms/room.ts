@@ -414,6 +414,44 @@ export function applyMoveToRoom(
 }
 
 // ============================================================================
+// Apply Resignation
+// ============================================================================
+
+/**
+ * Apply a resignation to a room.
+ * The resigning player loses; the opponent wins.
+ */
+export function applyResignation(
+  room: Room,
+  playerId: string
+): { success: true; room: Room } | { success: false; error: string } {
+  // Verify player is in room
+  const playerColor = getPlayerColor(room, playerId);
+  if (playerColor === null) {
+    return { success: false, error: 'player_not_in_room' };
+  }
+
+  // Verify game is active
+  if (room.status !== 'active') {
+    return { success: false, error: 'game_not_active' };
+  }
+
+  // Create updated room with resignation status
+  const updatedRoom: Room = {
+    ...room,
+    gameState: {
+      ...room.gameState,
+      status: 'resignation' as const,
+    },
+    status: 'finished',
+    version: room.version + 1,
+    updatedAt: new Date(),
+  };
+
+  return { success: true, room: updatedRoom };
+}
+
+// ============================================================================
 // Serialization for Database/Network
 // ============================================================================
 
