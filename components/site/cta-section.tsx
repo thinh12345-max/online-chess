@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { getPlayerId } from '@/lib/rooms/services';
+import { ensureAuthenticatedSession } from '@/lib/supabase/browser-auth';
 
 export function CtaSection() {
   const [isCreating, setIsCreating] = useState(false);
@@ -11,11 +11,19 @@ export function CtaSection() {
   const handlePlay = useCallback(async () => {
     setIsCreating(true);
     try {
-      const playerId = getPlayerId();
+      // Bootstrap an anonymous Supabase session if none exists.
+      // This gives us a verified user.id before room creation.
+      const userId = await ensureAuthenticatedSession();
+      if (!userId) {
+        throw new Error('Failed to authenticate');
+      }
+
+      // Room creation uses the authenticated Supabase session server-side.
+      // No playerId is sent from the client.
       const response = await fetch('/api/rooms/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId }),
+        body: JSON.stringify({}),
       });
       if (!response.ok) throw new Error('Failed to create room');
       const { room } = await response.json();

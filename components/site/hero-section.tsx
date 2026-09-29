@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { getPlayerId } from '@/lib/rooms/services';
+import { ensureAuthenticatedSessionWithError } from '@/lib/supabase/browser-auth';
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
@@ -68,11 +68,15 @@ export function HeroSection() {
   const handlePlay = useCallback(async () => {
     setIsCreating(true);
     try {
-      const playerId = getPlayerId();
+      const result = await ensureAuthenticatedSessionWithError();
+      if (!result.success) {
+        throw new Error(result.reason);
+      }
+
       const response = await fetch('/api/rooms/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId }),
+        body: JSON.stringify({}),
       });
       if (!response.ok) throw new Error('Failed to create room');
       const { room } = await response.json();

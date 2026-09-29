@@ -15,7 +15,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { getPlayerId } from '@/lib/rooms/services';
+import { getAuthenticatedUserId } from '@/lib/supabase/browser-auth';
 import { getRoom, joinRoom, applyMove } from '@/lib/rooms/services';
 import { shouldAcceptRoomUpdate } from '@/lib/rooms/room';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -32,7 +32,7 @@ type RoomState =
   | { status: 'error'; error: string }
   | { status: 'waiting'; room: Room; player: Player }
   | { status: 'ready'; room: Room; player: Player; opponent: Player }
-  | { status: 'full'; room: Room }
+  | { status: 'spectating'; room: Room }
   | { status: 'finished'; room: Room; player: Player };
 
 function getGameResultText(status: string): string {
@@ -56,10 +56,17 @@ export default function RoomPage({ params }: RoomPageProps) {
   const [resigning, setResigning] = useState(false);
   const [conflictBanner, setConflictBanner] = useState<'move' | 'resign' | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
   const router = useRouter();
   const realtimeRef = useRef<(() => void) | null>(null);
 
   const supabaseAvailable = isSupabaseConfigured();
+
+  // Initialize auth user ID from Supabase browser session.
+  // This is the ONLY identity source for the room page — no localStorage fallback.
+  useEffect(() => {
+    getAuthenticatedUserId().then((id) => setAuthUserId(id));
+  }, []);
 
   useEffect(() => {
     params.then((p) => setRoomId(p.roomId));
@@ -106,7 +113,9 @@ export default function RoomPage({ params }: RoomPageProps) {
     if (!roomId) return;
 
     const loadRoomData = async () => {
-      const playerId = getPlayerId();
+      // Use the authenticated Supabase user ID as player identity.
+      // authUserId is null until the session resolves — treated as unauthenticated.
+      const playerId = authUserId;
       const room = await fetchRoom(roomId);
 
       if (!room) {
@@ -129,7 +138,11 @@ export default function RoomPage({ params }: RoomPageProps) {
           setRoomState({ status: 'waiting', room, player: room.playerWhite! });
         } else if (isBlack) {
           setRoomState({ status: 'ready', room, player: room.playerBlack!, opponent: room.playerWhite! });
+        } else if (!playerId) {
+          // Unauthenticated — cannot join, spectate
+          setRoomState({ status: 'spectating', room });
         } else {
+          // Authenticated but not yet assigned — try to join as Black
           const result = await joinRoomOnServer(roomId, playerId);
           if (result.success && result.room) {
             setRoomState({
@@ -139,7 +152,8 @@ export default function RoomPage({ params }: RoomPageProps) {
               opponent: result.room.playerWhite!,
             });
           } else {
-            setRoomState({ status: 'error', error: result.error || 'Unable to join room' });
+            // Join failed — spectate the waiting game
+            setRoomState({ status: 'spectating', room });
           }
         }
       } else if (room.status === 'active') {
@@ -148,14 +162,16 @@ export default function RoomPage({ params }: RoomPageProps) {
           const opponent = isWhite ? room.playerBlack! : room.playerWhite!;
           setRoomState({ status: 'ready', room, player, opponent });
         } else {
-          setRoomState({ status: 'full', room });
+          // Authenticated user is neither white nor black — spectate only
+          setRoomState({ status: 'spectating', room });
         }
       } else if (room.status === 'finished') {
         if (isPlayer) {
           const player = isWhite ? room.playerWhite! : room.playerBlack!;
           setRoomState({ status: 'finished', room, player });
         } else {
-          setRoomState({ status: 'full', room });
+          // Authenticated user is neither white nor black — spectate the finished game
+          setRoomState({ status: 'spectating', room });
         }
       }
     };
@@ -166,27 +182,39 @@ export default function RoomPage({ params }: RoomPageProps) {
 
   const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
     const currentState = roomState;
-    if (!('player' in currentState)) return;
+
+    // Guard: only states with a room can be updated
+    if (!('room' in currentState)) return;
 
     // Reject stale updates: never replace newer state with older
     if (!shouldAcceptRoomUpdate(currentState.room, updatedRoom)) return;
 
-    const { player } = currentState;
+    if ('player' in currentState) {
+      // Player states — update with player context
+      const { player } = currentState;
 
-    if (updatedRoom.status === 'finished') {
-      setRoomState({ status: 'finished', room: updatedRoom, player });
-      return;
-    }
-
-    const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
-    const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
-
-    if (currentState.status === 'waiting') {
-      if (opponent) {
-        setRoomState({ status: 'ready', room: updatedRoom, player, opponent });
+      if (updatedRoom.status === 'finished') {
+        setRoomState({ status: 'finished', room: updatedRoom, player });
+        return;
       }
-    } else if (currentState.status === 'ready') {
-      setRoomState({ status: 'ready', room: updatedRoom, player, opponent: opponent! });
+
+      const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
+      const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
+
+      if (currentState.status === 'waiting') {
+        if (opponent) {
+          setRoomState({ status: 'ready', room: updatedRoom, player, opponent });
+        }
+      } else if (currentState.status === 'ready') {
+        setRoomState({ status: 'ready', room: updatedRoom, player, opponent: opponent! });
+      }
+    } else {
+      // Spectating — update room only, no player context
+      if (updatedRoom.status === 'finished') {
+        setRoomState({ status: 'spectating', room: updatedRoom });
+      } else {
+        setRoomState({ status: 'spectating', room: updatedRoom });
+      }
     }
   }, [roomState]);
 
@@ -198,7 +226,7 @@ export default function RoomPage({ params }: RoomPageProps) {
       return () => cancelAnimationFrame(timeoutId);
     }
 
-    if (roomState.status === 'loading' || roomState.status === 'error' || roomState.status === 'full') return;
+    if (roomState.status === 'loading' || roomState.status === 'error') return;
 
     if (realtimeRef.current) {
       realtimeRef.current();
@@ -243,8 +271,10 @@ export default function RoomPage({ params }: RoomPageProps) {
   }, [roomId, roomState.status, supabaseAvailable, fetchRoom, handleRealtimeUpdate]);
 
   const handleMove = useCallback(async (payload: ChessMovePayload) => {
-    if (!roomId) return;
-    const playerId = getPlayerId();
+    if (!roomId || !authUserId) return;
+    // Spectators cannot make moves
+    if (!('player' in roomState)) return;
+    const playerId = authUserId;
 
     if (!supabaseAvailable) {
       const result = applyMove(roomId, playerId, payload);
@@ -270,7 +300,7 @@ export default function RoomPage({ params }: RoomPageProps) {
     } catch (error) {
       console.error('Move request failed:', error);
     }
-  }, [roomId, supabaseAvailable]);
+  }, [roomId, authUserId, supabaseAvailable]);
 
   const handleCopyLink = useCallback(async () => {
     try {
@@ -293,10 +323,13 @@ export default function RoomPage({ params }: RoomPageProps) {
   }, [router]);
 
   const handleResign = useCallback(async () => {
-    if (!roomId || resigning) return;
+    if (!roomId || !authUserId || resigning) return;
+    // Spectators cannot resign
+    if (!('player' in roomState)) return;
     if (!confirm('Resign this game? You will lose.')) return;
 
-    const playerId = getPlayerId();
+    // Use the authenticated Supabase user ID — no localStorage fallback.
+    const playerId = authUserId;
     setResigning(true);
 
     if (!supabaseAvailable) {
@@ -331,7 +364,7 @@ export default function RoomPage({ params }: RoomPageProps) {
     } finally {
       setResigning(false);
     }
-  }, [roomId, resigning, roomState, supabaseAvailable]);
+  }, [roomId, authUserId, resigning, roomState, supabaseAvailable]);
 
   // Loading
   if (roomState.status === 'loading') {
@@ -372,25 +405,258 @@ export default function RoomPage({ params }: RoomPageProps) {
 
   const room = 'room' in roomState ? roomState.room : null;
 
-  // Room full
-  if (roomState.status === 'full' && room) {
+  // Spectating — third visitor or unauthenticated user watching a full game
+  if (roomState.status === 'spectating' && room) {
+    const isGameOver = room.gameState.status === 'checkmate' ||
+                       room.gameState.status === 'stalemate' ||
+                       room.gameState.status.startsWith('draw') ||
+                       room.gameState.status === 'resignation';
+    const currentTurn = room.gameState.turn === 'w' ? 'white' : 'black';
+    const whitePlayer = room.playerWhite;
+    const blackPlayer = room.playerBlack;
+
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4" style={{ background: '#f5f4f0' }}>
-        <div className="text-center max-w-sm">
-          <div className="text-5xl mb-4" aria-hidden="true">&#x1F6AB;</div>
-          <h1 className="text-xl font-bold mb-2 text-[#4a4538]">Room Full</h1>
-          <p className="text-sm text-[#9a9080] mb-2">
-            Room: <code className="px-2 py-0.5 rounded text-xs" style={{ background: '#e8e4dc', color: '#6a6050' }}>{room.roomId.slice(0, 8)}</code>
-          </p>
-          <p className="text-sm text-[#9a9080] mb-6">This game already has two players.</p>
-          <button
-            onClick={handleGoHome}
-            className="px-6 py-2.5 rounded-lg text-sm font-medium transition-colors"
-            style={{ background: '#4a4538', color: '#fafaf8' }}
-          >
-            Back to home
-          </button>
-        </div>
+      <div className="min-h-screen flex flex-col" style={{ background: '#f5f4f0' }}>
+        {/* Header */}
+        <header
+          className="w-full shrink-0"
+          style={{ borderBottom: '1px solid #e0ddd8', background: '#fafaf8' }}
+        >
+          <div className="max-w-[1120px] mx-auto px-4 sm:px-6">
+            <div className="flex h-12 items-center justify-between">
+              <button
+                onClick={handleGoHome}
+                className="flex items-center gap-1.5 text-[#6a6050] hover:text-[#4a4538] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863] rounded"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+                <span className="text-sm font-medium">Online Chess</span>
+              </button>
+
+              {/* Right controls */}
+              <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500' : connectionStatus === 'connecting' ? 'bg-yellow-400' : 'bg-red-400'}`} />
+                  <span className="text-[11px] text-[#9a9080] hidden sm:block">
+                    {connectionStatus === 'connected' ? 'Online' : connectionStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+                  </span>
+                </div>
+                <button
+                  onClick={handleCopyLink}
+                  className="text-[11px] px-2.5 py-1 rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                  style={{
+                    borderColor: '#d4cfc8',
+                    background: '#fafaf8',
+                    color: '#6a6050',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#f0ede8'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#fafaf8'; }}
+                  title="Copy invite link"
+                >
+                  {copied ? '✓ Copied' : 'Invite'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Game workspace */}
+        <main className="flex-1 flex items-start justify-center py-5 sm:py-8">
+          <div className="w-full max-w-[1120px] px-4 sm:px-6">
+
+            {/* Desktop: board center-left, info right */}
+            <div className="hidden md:grid gap-8 items-start" style={{ gridTemplateColumns: '1fr 280px' }}>
+
+              {/* Left: player panels + board */}
+              <div className="flex flex-col items-center gap-2">
+                {/* Black player */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <PlayerPanel
+                    label="Black"
+                    color="black"
+                    isYou={false}
+                    isYourTurn={!isGameOver && currentTurn === 'black'}
+                  />
+                </div>
+
+                {/* Board */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <OnlineChessGame
+                    gameState={room.gameState}
+                    playerColor="white"
+                    onMove={handleMove}
+                    isPlayerTurn={false}
+                    isGameOver={isGameOver}
+                  />
+                </div>
+
+                {/* White player */}
+                <div className="w-full" style={{ maxWidth: 560 }}>
+                  <PlayerPanel
+                    label="White"
+                    color="white"
+                    isYou={false}
+                    isYourTurn={!isGameOver && currentTurn === 'white'}
+                  />
+                </div>
+              </div>
+
+              {/* Right: info sidebar */}
+              <div className="flex flex-col gap-2 shrink-0">
+                {/* Spectator banner */}
+                <div
+                  className="px-3 py-2 text-center text-xs font-semibold"
+                  style={{ background: '#f0ede8', border: '1px solid #d4cfc8', borderRadius: '4px', color: '#6a6050' }}
+                >
+                  Spectating
+                </div>
+
+                {/* Status */}
+                {isGameOver && (
+                  <div
+                    className="px-3 py-2 text-center text-xs font-semibold"
+                    style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#4a4538' }}
+                  >
+                    {getGameResultText(room.gameState.status)}
+                  </div>
+                )}
+                {!isGameOver && room.gameState.status === 'check' && (
+                  <div
+                    className="px-3 py-2 text-center text-xs font-semibold"
+                    style={{ background: '#f3f3f8', border: '1px solid #c8c8e8', borderRadius: '4px', color: '#4040b0' }}
+                  >
+                    Check!
+                  </div>
+                )}
+
+                {/* Player identities */}
+                {whitePlayer && (
+                  <div
+                    className="px-3 py-2 text-xs"
+                    style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#9a9080' }}
+                  >
+                    <span className="font-medium text-[#6a6050]">White:</span> {whitePlayer.playerId.slice(0, 8)}
+                  </div>
+                )}
+                {blackPlayer && (
+                  <div
+                    className="px-3 py-2 text-xs"
+                    style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#9a9080' }}
+                  >
+                    <span className="font-medium text-[#6a6050]">Black:</span> {blackPlayer.playerId.slice(0, 8)}
+                  </div>
+                )}
+
+                <GameInfoPanel
+                  moveHistory={room.gameState.history}
+                  capturedPieces={room.gameState.capturedPieces}
+                />
+
+                {/* Invite link */}
+                <div
+                  className="px-3 py-2"
+                  style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px' }}
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#9a9080] mb-1.5">Invite link</p>
+                  <div className="rounded p-2 mb-2" style={{ background: '#f5f3ee' }}>
+                    <code className="text-[9px] break-all text-[#6a6050] select-all block">
+                      {typeof window !== 'undefined' ? window.location.href : ''}
+                    </code>
+                  </div>
+                  <button
+                    onClick={handleCopyLink}
+                    className="w-full px-3 py-1.5 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                    style={{ background: '#4a4538', color: '#fafaf8', borderRadius: '4px' }}
+                  >
+                    {copied ? '✓ Copied!' : 'Copy invite link'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Mobile: stacked */}
+            <div className="md:hidden flex flex-col items-center gap-2">
+
+              {/* Spectator banner */}
+              <div
+                className="w-full px-3 py-2 text-center text-xs font-semibold"
+                style={{ background: '#f0ede8', border: '1px solid #d4cfc8', borderRadius: '4px', color: '#6a6050', maxWidth: 'min(100%, 480px)' }}
+              >
+                Spectating
+              </div>
+
+              {/* Board */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <OnlineChessGame
+                  gameState={room.gameState}
+                  playerColor="white"
+                  onMove={handleMove}
+                  isPlayerTurn={false}
+                  isGameOver={isGameOver}
+                />
+              </div>
+
+              {/* Black player */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <PlayerPanel
+                  label="Black"
+                  color="black"
+                  isYou={false}
+                  isYourTurn={!isGameOver && currentTurn === 'black'}
+                />
+              </div>
+
+              {/* White player */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <PlayerPanel
+                  label="White"
+                  color="white"
+                  isYou={false}
+                  isYourTurn={!isGameOver && currentTurn === 'white'}
+                />
+              </div>
+
+              {/* Status */}
+              {isGameOver && (
+                <div
+                  className="w-full px-3 py-2 text-center text-xs font-semibold"
+                  style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px', color: '#4a4538', maxWidth: 'min(100%, 480px)' }}
+                >
+                  {getGameResultText(room.gameState.status)}
+                </div>
+              )}
+
+              {/* Info panel */}
+              <div className="w-full" style={{ maxWidth: 'min(100%, 480px)' }}>
+                <GameInfoPanel
+                  moveHistory={room.gameState.history}
+                  capturedPieces={room.gameState.capturedPieces}
+                />
+
+                {/* Invite link */}
+                <div
+                  className="px-3 py-2 mt-2"
+                  style={{ background: '#fdfcf8', border: '1px solid #e0ddd8', borderRadius: '4px' }}
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#9a9080] mb-1.5">Invite link</p>
+                  <div className="rounded p-2 mb-2" style={{ background: '#f5f3ee' }}>
+                    <code className="text-[9px] break-all text-[#6a6050] select-all block">
+                      {typeof window !== 'undefined' ? window.location.href : ''}
+                    </code>
+                  </div>
+                  <button
+                    onClick={handleCopyLink}
+                    className="w-full px-3 py-1.5 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b58863]"
+                    style={{ background: '#4a4538', color: '#fafaf8', borderRadius: '4px' }}
+                  >
+                    {copied ? '✓ Copied!' : 'Copy invite link'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
