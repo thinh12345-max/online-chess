@@ -308,7 +308,7 @@ export default function RoomPage({ params }: RoomPageProps) {
 
   const handleMove = useCallback(async (payload: ChessMovePayload) => {
     if (!roomId || !authUserId) return;
-    // Spectators cannot make moves
+    // Spectators cannot make moves — roomState must be fresh (not stale closure)
     if (!('player' in roomState)) return;
     const playerId = authUserId;
 
@@ -336,7 +336,7 @@ export default function RoomPage({ params }: RoomPageProps) {
     } catch (error) {
       console.error('Move request failed:', error);
     }
-  }, [roomId, authUserId, supabaseAvailable]);
+  }, [roomId, authUserId, supabaseAvailable, roomState]);
 
   const handleCopyLink = useCallback(async () => {
     try {
@@ -360,7 +360,7 @@ export default function RoomPage({ params }: RoomPageProps) {
 
   const handleResign = useCallback(async () => {
     if (!roomId || !authUserId || resigning) return;
-    // Spectators cannot resign
+    // Spectators cannot resign — roomState must be fresh (not stale closure)
     if (!('player' in roomState)) return;
     if (!confirm('Resign this game? You will lose.')) return;
 

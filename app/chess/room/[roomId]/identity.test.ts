@@ -542,3 +542,33 @@ describe('Browser client deduplication — DEBUG-4', () => {
     expect(source).toMatch(/import\s*\{[^}]*getAuthenticatedUserId[^}]*\}\s*from\s*['\"]@\/lib\/supabase\/browser-auth['\"]/);
   });
 });
+
+describe('Stale-closure prevention -- handleMove/handleResign guards', () => {
+
+  it('handleMove is wrapped in useCallback with roomState in deps', () => {
+    const source = readRoomPage();
+    // Verify handleMove deps include roomState: }, [roomId, authUserId, supabaseAvailable, roomState]);
+    const hasRoomStateDeps = source.includes(', roomState]);') && source.includes('supabaseAvailable, roomState');
+    expect(hasRoomStateDeps).toBe(true);
+  });
+
+  it('handleResign is wrapped in useCallback with roomState in deps', () => {
+    const source = readRoomPage();
+    // Verify handleResign deps include roomState: [roomId, authUserId, resigning, roomState, supabaseAvailable]
+    const hasRoomStateDeps = source.includes('resigning, roomState');
+    expect(hasRoomStateDeps).toBe(true);
+  });
+
+  it('handleMove guard checks player presence in roomState', () => {
+    const source = readRoomPage();
+    const moveGuard = source.includes("('player' in roomState))");
+    expect(moveGuard).toBe(true);
+  });
+
+  it('handleResign guard checks player presence in roomState', () => {
+    const source = readRoomPage();
+    const resignGuard = source.includes("('player' in roomState))");
+    expect(resignGuard).toBe(true);
+  });
+});
+
