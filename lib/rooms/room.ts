@@ -94,15 +94,21 @@ export function generatePlayerId(): string {
 
 /**
  * Validate player ID format
+ *
+ * Accepts:
+ * - Legacy 16-character hex IDs (e.g., "a1b2c3d4e5f60011")
+ * - Supabase UUID format (e.g., "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
  */
 export function isValidPlayerId(playerId: string): boolean {
   if (!playerId || typeof playerId !== 'string') {
     return false;
   }
 
-  // 16 hex characters
-  const hexRegex = /^[0-9a-f]{16}$/i;
-  return hexRegex.test(playerId);
+  // 16 hex characters (legacy format)
+  const shortHexRegex = /^[0-9a-f]{16}$/i;
+  // Supabase UUID format: 8-4-4-4-12 hex characters with hyphens
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(playerId) || shortHexRegex.test(playerId);
 }
 
 // ============================================================================

@@ -15,7 +15,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { getAuthenticatedUserId } from '@/lib/supabase/browser-auth';
+import { getAuthenticatedUserId, ensureAuthenticatedSessionWithError } from '@/lib/supabase/browser-auth';
 import { getRoom, joinRoom, applyMove } from '@/lib/rooms/services';
 import { shouldAcceptRoomUpdate } from '@/lib/rooms/room';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -63,9 +63,38 @@ export default function RoomPage({ params }: RoomPageProps) {
   const supabaseAvailable = isSupabaseConfigured();
 
   // Initialize auth user ID from Supabase browser session.
+  // If no session exists, bootstrap an anonymous session so the user can
+  // participate as White or Black — not as a spectator.
   // This is the ONLY identity source for the room page — no localStorage fallback.
   useEffect(() => {
-    getAuthenticatedUserId().then((id) => setAuthUserId(id));
+    let cancelled = false;
+
+    const resolveAuth = async () => {
+      // First check if a session already exists
+      const existingId = await getAuthenticatedUserId();
+      if (cancelled) return;
+
+      if (existingId) {
+        // Existing session — use it
+        setAuthUserId(existingId);
+        return;
+      }
+
+      // No session — bootstrap an anonymous session so the visitor
+      // can join as a player, not spectate
+      const bootstrapResult = await ensureAuthenticatedSessionWithError();
+      if (cancelled) return;
+
+      if (bootstrapResult.success) {
+        setAuthUserId(bootstrapResult.userId);
+      } else {
+        // Auth bootstrap failed — show error, not spectator
+        setRoomState({ status: 'error', error: 'Authentication failed. Please refresh and try again.' });
+      }
+    };
+
+    resolveAuth();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -123,11 +152,18 @@ export default function RoomPage({ params }: RoomPageProps) {
         return;
       }
 
-      // Guard: prevent a slow-fetched older version from overwriting a newer local state
+      // Guard: prevent a slow-fetched older version from overwriting a newer local state.
       // (can happen when multiple refreshKey changes or concurrent realtime events fire)
-      // roomState is captured at effect-schedule time; comparing against it prevents races
+      // roomState is captured at effect-schedule time; comparing against it prevents races.
+      //
+      // CRITICAL: Only apply this guard when the current state is already a player state.
+      // When transitioning from loading/spectating to a player state (e.g., auth resolved
+      // and this user is the white player), the equal-version room must be accepted —
+      // otherwise the second loadRoomData with real authUserId is silently dropped and
+      // the user remains stuck in spectator mode despite matching white_player_id.
       const current = ('room' in roomState) ? (roomState as { room: Room }).room : null;
-      if (!shouldAcceptRoomUpdate(current, room)) return;
+      const currentIsPlayer = 'player' in roomState;
+      if (current && currentIsPlayer && !shouldAcceptRoomUpdate(current, room)) return;
 
       const isWhite = room.playerWhite?.playerId === playerId;
       const isBlack = room.playerBlack?.playerId === playerId;
@@ -152,8 +188,8 @@ export default function RoomPage({ params }: RoomPageProps) {
               opponent: result.room.playerWhite!,
             });
           } else {
-            // Join failed — spectate the waiting game
-            setRoomState({ status: 'spectating', room });
+            // Join failed — show error instead of silently spectating
+            setRoomState({ status: 'error', error: result.error || 'Unable to join room' });
           }
         }
       } else if (room.status === 'active') {
@@ -178,7 +214,7 @@ export default function RoomPage({ params }: RoomPageProps) {
 
     loadRoomData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, refreshKey, fetchRoom, joinRoomOnServer]);
+  }, [roomId, authUserId, refreshKey, fetchRoom, joinRoomOnServer]);
 
   const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
     const currentState = roomState;
@@ -233,9 +269,9 @@ export default function RoomPage({ params }: RoomPageProps) {
       realtimeRef.current = null;
     }
 
-    import('@/lib/supabase').then(({ getSupabaseClient }) => {
+    import('@/lib/supabase/browser-auth').then(({ getSupabaseBrowserClient }) => {
       try {
-        const supabase = getSupabaseClient();
+        const supabase = getSupabaseBrowserClient();
         const channel = supabase
           .channel(`room:${roomId}`)
           .on(
@@ -246,14 +282,14 @@ export default function RoomPage({ params }: RoomPageProps) {
               table: 'rooms',
               filter: `room_id=eq.${roomId}`,
             },
-            async (payload) => {
+            async (payload: { eventType: string; new?: unknown }) => {
               if (payload.eventType === 'UPDATE' && payload.new) {
                 const updatedRoom = await fetchRoom(roomId);
                 if (updatedRoom) handleRealtimeUpdate(updatedRoom);
               }
             }
           )
-          .subscribe((status) => {
+          .subscribe((status: string) => {
             if (status === 'SUBSCRIBED') setConnectionStatus('connected');
             else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnectionStatus('disconnected');
           });

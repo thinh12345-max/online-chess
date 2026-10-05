@@ -222,12 +222,13 @@ describe('Join/move/resign APIs unchanged', () => {
     expect(resignSource).not.toMatch(/ensureAuthenticatedSession/);
   });
 
-  it('room page does not import ensureAuthenticatedSession', () => {
+  it('room page uses ensureAuthenticatedSession for auth bootstrap', () => {
     const roomPage = fs.readFileSync(
       path.join(process.cwd(), 'app', 'chess', 'room', '[roomId]', 'page.tsx'),
       'utf-8'
     );
-    expect(roomPage).not.toMatch(/ensureAuthenticatedSession/);
+    // DEBUG-5: room page now bootstraps auth using ensureAuthenticatedSession
+    expect(roomPage).toMatch(/ensureAuthenticatedSession/);
   });
 });
 

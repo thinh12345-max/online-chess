@@ -58,19 +58,19 @@ describe('authUserId state initialization', () => {
     expect(source).toMatch(/authUserId.*useState/);
   });
 
-  it('initializes authUserId via getAuthenticatedUserId().then(setAuthUserId)', () => {
+  it('initializes authUserId via async auth bootstrap (not .then pattern)', () => {
     const source = readRoomPage();
-    // useEffect calls getAuthenticatedUserId and passes result to setAuthUserId
-    expect(source).toMatch(/getAuthenticatedUserId\(\)\.then/);
+    // The new auth flow uses async/await with ensureAuthenticatedSessionWithError
+    expect(source).toMatch(/ensureAuthenticatedSessionWithError/);
     expect(source).toMatch(/setAuthUserId/);
   });
 
   it('auth init useEffect has empty deps (runs once on mount)', () => {
     const source = readRoomPage();
     // The auth init useEffect should not re-run on roomId/render changes
-    // Match the pattern: useEffect(() => { ... }, [])
+    // Match the async pattern: useEffect(() => { const resolveAuth = async () => {...} ... }, [])
     const authEffect = source.match(
-      /useEffect\(\(\)\s*=>\s*\{[^}]*getAuthenticatedUserId[^}]*\},\s*\[\]/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?resolveAuth[\s\S]*?\},\s*\[\]/
     );
     expect(authEffect).not.toBeNull();
   });
@@ -319,9 +319,9 @@ describe('Page state machine — spectator mode', () => {
     );
     expect(activeBranch).toBeNull();
     expect(finishedBranch).toBeNull();
-    // The waiting branch must await joinRoomOnServer
+    // The waiting branch must await joinRoomOnServer (600 = safe for CRLF line endings)
     const waitingBranch = source.match(
-      /room\.status\s*===\s*'waiting'[\s\S]{0,500}await\s+joinRoomOnServer/
+      /room\.status\s*===\s*'waiting'[\s\S]{0,600}await\s+joinRoomOnServer/
     );
     expect(waitingBranch).not.toBeNull();
   });
@@ -338,5 +338,207 @@ describe('Supabase client availability check preserved', () => {
     const source = readRoomPage();
     // The no-Supabase path still uses localStorage room via getRoom()
     expect(source).toMatch(/getRoom\(\s*rid\s*\)/);
+  });
+});
+
+describe('Auth session race fix — DEBUG-2', () => {
+
+  it('authUserId is included in the loadRoomData effect dependency array', () => {
+    const source = readRoomPage();
+    // Match the useEffect that contains loadRoomData and check its deps
+    const effectMatch = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?loadRoomData\(\)[\s\S]*?\n\s*\}\s*,\s*\[([^\]]*)\]/
+    );
+    expect(effectMatch).not.toBeNull();
+    const deps = effectMatch![1];
+    expect(deps).toContain('authUserId');
+  });
+
+  it('Authenticated player resolving after initial mount re-runs loadRoomData', () => {
+    const source = readRoomPage();
+    // authUserId as a state variable must be captured in the effect
+    // The effect captures playerId = authUserId inside loadRoomData
+    expect(source).toMatch(/const\s+playerId\s*=\s*authUserId/);
+  });
+
+  it('Authenticated player with matching white_player_id is not classified as spectator', () => {
+    const source = readRoomPage();
+    // When isWhite is true (white_player_id === playerId), sets ready or waiting, NOT spectating
+    const waitingWhite = source.match(
+      /isWhite[\s\S]{0,200}setRoomState\(\{\s*status:\s*['"]waiting['"]/
+    );
+    expect(waitingWhite).not.toBeNull();
+    // active (ready) state also goes to ready, not spectating
+    const activeWhite = source.match(
+      /room\.status\s*===\s*'active'[\s\S]{0,200}setRoomState\(\{\s*status:\s*['"]ready['"]/
+    );
+    expect(activeWhite).not.toBeNull();
+  });
+
+  it('Authenticated player with matching black_player_id is not classified as spectator', () => {
+    const source = readRoomPage();
+    // When isBlack is true and room is waiting, player becomes ready (black joined)
+    const waitingBlack = source.match(
+      /isBlack[\s\S]{0,200}setRoomState\(\{\s*status:\s*['"]ready['"]/
+    );
+    expect(waitingBlack).not.toBeNull();
+    // When active and isBlack, player becomes ready with correct colors
+    const activeBlack = source.match(
+      /room\.status\s*===\s*'active'[\s\S]{0,200}setRoomState\(\{\s*status:\s*['"]ready['"]/
+    );
+    expect(activeBlack).not.toBeNull();
+  });
+
+  it('Join failure enters error state, not spectator state', () => {
+    const source = readRoomPage();
+    // When join fails (result.success is false), setRoomState gets status: 'error'
+    // Allow for } else { between condition and setRoomState
+    const joinFail = source.match(
+      /result\.success[\s\S]{0,500}setRoomState\(\{\s*status:\s*['"]error['"]/
+    );
+    expect(joinFail).not.toBeNull();
+    // The waiting branch must NOT set spectating on join failure
+    // The error state replaces the old spectating fallback
+    const waitingBranch = source.match(
+      /room\.status\s*===\s*'waiting'[\s\S]{0,800}result\.success[\s\S]{0,300}setRoomState\(\{\s*status:\s*['"]spectating['"]/
+    );
+    expect(waitingBranch).toBeNull();
+  });
+
+  it('Genuine third-party user in active room still enters spectator mode', () => {
+    const source = readRoomPage();
+    // active room + not isPlayer → spectating
+    // } else { appears between the isPlayer check and setRoomState
+    const activeSpectating = source.match(
+      /room\.status\s*===\s*'active'[\s\S]{0,800}setRoomState\(\{\s*status:\s*'spectating'/
+    );
+    expect(activeSpectating).not.toBeNull();
+  });
+
+  it('Unauthenticated visitor in waiting room still enters spectator mode', () => {
+    const source = readRoomPage();
+    // Unauthenticated: !playerId → spectating
+    const unauthSpectating = source.match(
+      /!\s*playerId[\s\S]{0,200}setRoomState\(\{\s*status:\s*['"]spectating['"]/
+    );
+    expect(unauthSpectating).not.toBeNull();
+  });
+
+  it('handleMove guards against spectators — uses player presence check', () => {
+    const source = readRoomPage();
+    // handleMove must return early if not a player state
+    const moveGuard = source.match(
+      /handleMove[\s\S]{0,300}if\s*\(\s*!\s*\(\s*['"]player['"]\s+in\s+roomState\s*\)/
+    );
+    expect(moveGuard).not.toBeNull();
+  });
+
+  it('handleResign guards against spectators — uses player presence check', () => {
+    const source = readRoomPage();
+    const resignGuard = source.match(
+      /handleResign[\s\S]{0,300}if\s*\(\s*!\s*\(\s*['"]player['"]\s+in\s+roomState\s*\)/
+    );
+    expect(resignGuard).not.toBeNull();
+  });
+});
+
+describe('Auth bootstrap — DEBUG-5', () => {
+
+  it('room page imports ensureAuthenticatedSessionWithError from browser-auth', () => {
+    const source = readRoomPage();
+    // Now uses ensureAuthenticatedSessionWithError for bootstrap result handling
+    expect(source).toMatch(/import\s*\{[^}]*ensureAuthenticatedSessionWithError[^}]*\}\s*from\s*['"]@\/lib\/supabase\/browser-auth['"]/);
+  });
+
+  it('auth useEffect calls getAuthenticatedUserId first', () => {
+    const source = readRoomPage();
+    expect(source).toMatch(/getAuthenticatedUserId\(\)/);
+  });
+
+  it('auth useEffect calls ensureAuthenticatedSessionWithError when no existing session', () => {
+    const source = readRoomPage();
+    // The bootstrap uses ensureAuthenticatedSessionWithError to get full result
+    expect(source).toMatch(/ensureAuthenticatedSessionWithError/);
+  });
+
+  it('auth useEffect sets authUserId from existing session when available', () => {
+    const source = readRoomPage();
+    // Should set authUserId from the existing session result
+    expect(source).toMatch(/setAuthUserId\(existingId\)/);
+  });
+
+  it('auth useEffect sets authUserId from bootstrap result when no session', () => {
+    const source = readRoomPage();
+    // Should set authUserId from bootstrap result
+    expect(source).toMatch(/setAuthUserId\(bootstrapResult\.userId\)/);
+  });
+
+  it('auth bootstrap failure sets error state, not spectator state', () => {
+    const source = readRoomPage();
+    // When bootstrap fails, should set error state
+    const errorState = source.match(/status:\s*['"]error['"][\s\S]{0,300}Authentication failed/);
+    expect(errorState).not.toBeNull();
+    // Should NOT set spectating on bootstrap failure
+    const spectatorOnFail = source.match(/bootstrapResult[\s\S]{0,500}setRoomState\(\{\s*status:\s*['"]spectating['"]/);
+    expect(spectatorOnFail).toBeNull();
+  });
+
+  it('auth useEffect has empty dependencies (runs once on mount)', () => {
+    const source = readRoomPage();
+    // Match the auth init useEffect
+    const authEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?ensureAuthenticatedSession[\s\S]*?\},\s*\[\]/
+    );
+    expect(authEffect).not.toBeNull();
+  });
+
+  it('loadRoomData effect dependency array still includes authUserId (DEBUG-2 preserved)', () => {
+    const source = readRoomPage();
+    // Find the loadRoomData useEffect and verify authUserId is in deps
+    const loadEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?loadRoomData[\s\S]*?\n\s*\}\s*,\s*\[([^\]]*)\]/
+    );
+    expect(loadEffect).not.toBeNull();
+    const deps = loadEffect![1];
+    expect(deps).toContain('authUserId');
+  });
+
+  it('does NOT use localStorage or getPlayerId for fallback identity', () => {
+    const source = readRoomPage();
+    // The new auth flow does NOT fall back to getPlayerId or localStorage
+    expect(source).not.toMatch(/getPlayerId\(\)/);
+    // localStorage only in comments, not implementation
+    const localStorageLines = source.split('\n').filter(
+      (l: string) => l.includes('localStorage') && !l.trim().startsWith('//') && !l.trim().startsWith('*')
+    );
+    expect(localStorageLines).toHaveLength(0);
+  });
+});
+
+describe('Browser client deduplication — DEBUG-4', () => {
+
+  it('RoomPage realtime uses getSupabaseBrowserClient for the realtime subscription', () => {
+    const source = readRoomPage();
+    // The realtime subscription should import from browser-auth, not from client
+    expect(source).toMatch(/import\(['\"][^'\"]*browser-auth['\"][\s\S]{0,200}getSupabaseBrowserClient/);
+  });
+
+  it('RoomPage realtime does not use getSupabaseClient for browser-side realtime', () => {
+    const source = readRoomPage();
+    // The realtime import should NOT use getSupabaseClient from lib/supabase
+    // Check the dynamic import for realtime uses browser-auth
+    expect(source).toMatch(/import\(['\"][^'\"]*browser-auth['\"]/);
+    // The dynamic import for getSupabaseClient should not appear (only client.ts is server-side)
+    // Confirm it does not import getSupabaseClient in the realtime context
+    const dynamicImport = source.match(
+      /import\(['\"][^'\"]*lib\/supabase[^'\"]*['\"][\s\S]{0,200}getSupabaseClient/
+    );
+    expect(dynamicImport).toBeNull();
+  });
+
+  it('RoomPage still imports getAuthenticatedUserId from browser-auth', () => {
+    const source = readRoomPage();
+    // Auth still uses browser-auth getAuthenticatedUserId
+    expect(source).toMatch(/import\s*\{[^}]*getAuthenticatedUserId[^}]*\}\s*from\s*['\"]@\/lib\/supabase\/browser-auth['\"]/);
   });
 });

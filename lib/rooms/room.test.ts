@@ -90,9 +90,32 @@ describe('Player ID Generation', () => {
     expect(playerId1).not.toBe(playerId2);
   });
 
-  it('validates correct player ID format', () => {
+  it('validates correct player ID format (legacy 16-char hex)', () => {
     expect(isValidPlayerId('1234567890abcdef')).toBe(true);
     expect(isValidPlayerId('ABCDEF0123456789')).toBe(true);
+    expect(isValidPlayerId('aabbccddeeff0011')).toBe(true);
+  });
+
+  it('accepts Supabase UUID format', () => {
+    // Standard UUID format
+    expect(isValidPlayerId('a1b2c3d4-e5f6-7890-abcd-ef1234567890')).toBe(true);
+    // Uppercase UUID
+    expect(isValidPlayerId('A1B2C3D4-E5F6-7890-ABCD-EF1234567890')).toBe(true);
+    // Mixed case UUID
+    expect(isValidPlayerId('A1b2C3d4-E5F6-7890-aBcD-eF1234567890')).toBe(true);
+  });
+
+  it('rejects malformed UUIDs', () => {
+    // Missing hyphens
+    expect(isValidPlayerId('a1b2c3d4e5f67890abcdef1234567890')).toBe(false);
+    // Too short
+    expect(isValidPlayerId('a1b2c3d4-e5f6-7890-abcd')).toBe(false);
+    // Too long
+    expect(isValidPlayerId('a1b2c3d4-e5f6-7890-abcd-ef12345678900')).toBe(false);
+    // Invalid characters
+    expect(isValidPlayerId('a1b2c3d4-e5f6-7890-abcd-ef123456789g')).toBe(false);
+    // Wrong format (room ID with hyphens but wrong length)
+    expect(isValidPlayerId('a1b2c3d4-e5f6-7890')).toBe(false);
   });
 
   it('rejects invalid player IDs', () => {

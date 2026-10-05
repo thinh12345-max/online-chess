@@ -193,6 +193,40 @@ describe('Join domain logic (verified fix: uses model not localStorage)', () => 
   });
 
   // --------------------------------------------------------------------------
+  // Supabase UUID player ID support (DEBUG-5)
+  // --------------------------------------------------------------------------
+
+  it('accepts Supabase UUID player IDs for join', () => {
+    // Supabase anonymous sessions use UUID format
+    const whiteId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const blackId = 'FEDCBA01-2345-6789-ABCD-EF1234567890';
+    const room = createRoom({ playerId: whiteId });
+
+    const result = joinRoom(room, { roomId: room.roomId, playerId: blackId });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.room.playerWhite?.playerId).toBe(whiteId);
+      expect(result.room.playerBlack?.playerId).toBe(blackId);
+      expect(result.room.status).toBe('active');
+    }
+  });
+
+  it('distinguishes White and Black when using UUID player IDs', () => {
+    const whiteId = '11111111-2222-3333-4444-555555555555';
+    const blackId = '66666666-7777-8888-9999-aaaaaaaaaaaa';
+    const room = createRoom({ playerId: whiteId });
+
+    const result = joinRoom(room, { roomId: room.roomId, playerId: blackId });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.room.playerWhite?.playerId).toBe(whiteId);
+      expect(result.room.playerWhite?.color).toBe('white');
+      expect(result.room.playerBlack?.playerId).toBe(blackId);
+      expect(result.room.playerBlack?.color).toBe('black');
+    }
+  });
+
+  // --------------------------------------------------------------------------
   // Version behavior on join
   // --------------------------------------------------------------------------
 
