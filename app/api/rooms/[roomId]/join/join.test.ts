@@ -230,15 +230,16 @@ describe('Join domain logic (verified fix: uses model not localStorage)', () => 
   // Version behavior on join
   // --------------------------------------------------------------------------
 
-  it('join does not increment version (only moves do)', () => {
+  it('join increments version from 0 to 1', () => {
     const room = createRoom({ playerId: generatePlayerId() });
     expect(room.version).toBe(0);
 
     const result = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });
     expect(result.success).toBe(true);
     if (result.success) {
-      // Join is a metadata change, not a game state change
-      expect(result.room.version).toBe(0);
+      // Join changes status/player membership so version must increment
+      // to enable state-transition detection by shouldAcceptRoomUpdate
+      expect(result.room.version).toBe(1);
     }
   });
 });

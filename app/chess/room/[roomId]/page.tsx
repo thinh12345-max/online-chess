@@ -59,6 +59,14 @@ export default function RoomPage({ params }: RoomPageProps) {
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   const router = useRouter();
   const realtimeRef = useRef<(() => void) | null>(null);
+  const pollingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const roomStateRef = useRef<RoomState>({ status: 'loading' });
+
+  // Keep roomStateRef in sync with the latest roomState value.
+  // This allows callbacks to read the current value without stale closures.
+  useEffect(() => {
+    roomStateRef.current = roomState;
+  });
 
   const supabaseAvailable = isSupabaseConfigured();
 
@@ -104,7 +112,7 @@ export default function RoomPage({ params }: RoomPageProps) {
   const fetchRoom = useCallback(async (rid: string): Promise<Room | null> => {
     if (!supabaseAvailable) return getRoom(rid);
     try {
-      const response = await fetch(`/api/rooms/${rid}`);
+      const response = await fetch(`/api/rooms/${rid}`, { cache: 'no-store' });
       if (!response.ok) {
         if (response.status === 404) return null;
         throw new Error('Failed to fetch room');
@@ -134,6 +142,51 @@ export default function RoomPage({ params }: RoomPageProps) {
     }
   }, [supabaseAvailable]);
 
+  // handleRealtimeUpdate is declared before loadRoomData so the polling fallback
+  // (defined inside loadRoomData) can reference it via closure. This is safe because
+  // useCallback produces a stable function reference that doesn't change between renders.
+  const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
+    const currentState = roomStateRef.current;
+
+    // Guard: only states with a room can be updated
+    if (!('room' in currentState)) return;
+
+    // Reject stale updates: never replace newer state with older
+    if (!shouldAcceptRoomUpdate(currentState.room, updatedRoom)) return;
+
+    if ('player' in currentState) {
+      // Player states — update with player context
+      const { player } = currentState;
+
+      if (updatedRoom.status === 'finished') {
+        setRoomState({ status: 'finished', room: updatedRoom, player });
+        // Clear polling on game end
+        if (pollingTimerRef.current) { clearTimeout(pollingTimerRef.current); pollingTimerRef.current = null; }
+        return;
+      }
+
+      const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
+      const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
+
+      if (currentState.status === 'waiting') {
+        if (opponent) {
+          setRoomState({ status: 'ready', room: updatedRoom, player, opponent });
+          // Clear polling now that we've transitioned to ready
+          if (pollingTimerRef.current) { clearTimeout(pollingTimerRef.current); pollingTimerRef.current = null; }
+        }
+      } else if (currentState.status === 'ready') {
+        setRoomState({ status: 'ready', room: updatedRoom, player, opponent: opponent! });
+      }
+    } else {
+      // Spectating — update room only, no player context
+      if (updatedRoom.status === 'finished') {
+        setRoomState({ status: 'spectating', room: updatedRoom });
+      } else {
+        setRoomState({ status: 'spectating', room: updatedRoom });
+      }
+    }
+  }, []);
+
   // loadRoomData intentionally reads roomState at schedule-time to capture the current
   // version before the async fetch resolves. Adding roomState to deps would cause a
   // render loop. The stale-closure risk is acceptable and further guarded by
@@ -142,6 +195,7 @@ export default function RoomPage({ params }: RoomPageProps) {
     if (!roomId) return;
 
     const loadRoomData = async () => {
+      try {
       // Use the authenticated Supabase user ID as player identity.
       // authUserId is null until the session resolves — treated as unauthenticated.
       const playerId = authUserId;
@@ -152,15 +206,6 @@ export default function RoomPage({ params }: RoomPageProps) {
         return;
       }
 
-      // Guard: prevent a slow-fetched older version from overwriting a newer local state.
-      // (can happen when multiple refreshKey changes or concurrent realtime events fire)
-      // roomState is captured at effect-schedule time; comparing against it prevents races.
-      //
-      // CRITICAL: Only apply this guard when the current state is already a player state.
-      // When transitioning from loading/spectating to a player state (e.g., auth resolved
-      // and this user is the white player), the equal-version room must be accepted —
-      // otherwise the second loadRoomData with real authUserId is silently dropped and
-      // the user remains stuck in spectator mode despite matching white_player_id.
       const current = ('room' in roomState) ? (roomState as { room: Room }).room : null;
       const currentIsPlayer = 'player' in roomState;
       if (current && currentIsPlayer && !shouldAcceptRoomUpdate(current, room)) return;
@@ -172,6 +217,25 @@ export default function RoomPage({ params }: RoomPageProps) {
       if (room.status === 'waiting') {
         if (isWhite) {
           setRoomState({ status: 'waiting', room, player: room.playerWhite! });
+          // Polling fallback: if realtime is not connecting, poll every 2s while waiting
+          // for an opponent so the white player transitions to ready when B joins.
+          // Uses setTimeout chain (not setInterval) to avoid React Strict Mode double-invocation
+          // and to ensure each poll completes before the next is scheduled.
+          const scheduleNextPoll = () => {
+            if (pollingTimerRef.current) clearTimeout(pollingTimerRef.current);
+            pollingTimerRef.current = setTimeout(async () => {
+              // Read current state from ref to avoid stale closure
+              if (roomStateRef.current.status !== 'waiting') return;
+              const updated = await fetchRoom(roomId);
+              if (updated && updated.status === 'active') {
+                handleRealtimeUpdate(updated);
+              } else if (updated && updated.status === 'waiting') {
+                // Room still waiting — schedule next poll
+                scheduleNextPoll();
+              }
+            }, 2000);
+          };
+          scheduleNextPoll();
         } else if (isBlack) {
           setRoomState({ status: 'ready', room, player: room.playerBlack!, opponent: room.playerWhite! });
         } else if (!playerId) {
@@ -210,49 +274,13 @@ export default function RoomPage({ params }: RoomPageProps) {
           setRoomState({ status: 'spectating', room });
         }
       }
+    } catch (err) {
+      console.error('loadRoomData error:', err);
+    }
     };
 
     loadRoomData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, authUserId, refreshKey, fetchRoom, joinRoomOnServer]);
-
-  const handleRealtimeUpdate = useCallback((updatedRoom: Room) => {
-    const currentState = roomState;
-
-    // Guard: only states with a room can be updated
-    if (!('room' in currentState)) return;
-
-    // Reject stale updates: never replace newer state with older
-    if (!shouldAcceptRoomUpdate(currentState.room, updatedRoom)) return;
-
-    if ('player' in currentState) {
-      // Player states — update with player context
-      const { player } = currentState;
-
-      if (updatedRoom.status === 'finished') {
-        setRoomState({ status: 'finished', room: updatedRoom, player });
-        return;
-      }
-
-      const isWhite = updatedRoom.playerWhite?.playerId === player.playerId;
-      const opponent = isWhite ? updatedRoom.playerBlack : updatedRoom.playerWhite;
-
-      if (currentState.status === 'waiting') {
-        if (opponent) {
-          setRoomState({ status: 'ready', room: updatedRoom, player, opponent });
-        }
-      } else if (currentState.status === 'ready') {
-        setRoomState({ status: 'ready', room: updatedRoom, player, opponent: opponent! });
-      }
-    } else {
-      // Spectating — update room only, no player context
-      if (updatedRoom.status === 'finished') {
-        setRoomState({ status: 'spectating', room: updatedRoom });
-      } else {
-        setRoomState({ status: 'spectating', room: updatedRoom });
-      }
-    }
-  }, [roomState]);
+  }, [roomId, authUserId, refreshKey, fetchRoom, joinRoomOnServer, handleRealtimeUpdate]);
 
   useEffect(() => {
     if (!supabaseAvailable || !roomId) {
@@ -290,12 +318,15 @@ export default function RoomPage({ params }: RoomPageProps) {
             }
           )
           .subscribe((status: string) => {
-            if (status === 'SUBSCRIBED') setConnectionStatus('connected');
+            if (status === 'SUBSCRIBED') {
+              setConnectionStatus('connected');
+              // Realtime connected — clear the polling fallback
+              if (pollingTimerRef.current) { clearTimeout(pollingTimerRef.current); pollingTimerRef.current = null; }
+            }
             else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnectionStatus('disconnected');
           });
 
         realtimeRef.current = () => { supabase.removeChannel(channel); };
-        setConnectionStatus('connected');
       } catch {
         setConnectionStatus('disconnected');
       }
@@ -303,6 +334,7 @@ export default function RoomPage({ params }: RoomPageProps) {
 
     return () => {
       if (realtimeRef.current) { realtimeRef.current(); realtimeRef.current = null; }
+      if (pollingTimerRef.current) { clearTimeout(pollingTimerRef.current); pollingTimerRef.current = null; }
     };
   }, [roomId, roomState.status, supabaseAvailable, fetchRoom, handleRealtimeUpdate]);
 
@@ -331,12 +363,23 @@ export default function RoomPage({ params }: RoomPageProps) {
         setRefreshKey((k) => k + 1);
         return;
       }
-      if (!data.success) console.error('Move failed:', data.error);
+      if (!data.success) {
+        console.error('Move failed:', data.error);
+        setRefreshKey((k) => k + 1);
+        return;
+      }
+      // Apply authoritative move response directly — no redundant refetch needed.
+      // handleRealtimeUpdate uses shouldAcceptRoomUpdate to guard against races.
+      if (data.room) {
+        handleRealtimeUpdate(data.room);
+        return;
+      }
+      // Fallback: room data missing from response, use refetch
       setRefreshKey((k) => k + 1);
     } catch (error) {
       console.error('Move request failed:', error);
     }
-  }, [roomId, authUserId, supabaseAvailable, roomState]);
+  }, [roomId, authUserId, supabaseAvailable, roomState, handleRealtimeUpdate]);
 
   const handleCopyLink = useCallback(async () => {
     try {

@@ -61,18 +61,18 @@ export function OnlineChessGame({
   } | null>(null);
 
   // Sync with authoritative state
+  // Intentional: localChess must track authoritative gameState.fen immediately.
+  // board renders from localChess; any deferral creates a stale-frame divergence.
   useEffect(() => {
-    const timeoutId = requestAnimationFrame(() => {
-      try {
-        const newChess = new Chess(gameState.fen);
-        setLocalChess(newChess);
-        setSelectedSquare(null);
-        setLegalMoves([]);
-      } catch {
-        // Invalid FEN — ignore
-      }
-    });
-    return () => cancelAnimationFrame(timeoutId);
+    try {
+      const newChess = new Chess(gameState.fen);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLocalChess(newChess);
+      setSelectedSquare(null);
+      setLegalMoves([]);
+    } catch {
+      // Invalid FEN — ignore
+    }
   }, [gameState.fen]);
 
   const currentTurn = useMemo(() =>

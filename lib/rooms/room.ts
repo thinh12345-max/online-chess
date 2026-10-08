@@ -255,6 +255,7 @@ export function joinRoom(room: Room, options: JoinRoomOptions): JoinResult {
     ...room,
     playerBlack: player,
     status: 'active',
+    version: room.version + 1,
     updatedAt: new Date(),
   };
 

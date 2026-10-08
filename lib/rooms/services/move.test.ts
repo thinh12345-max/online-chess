@@ -250,11 +250,11 @@ describe('Version and Optimistic Locking', () => {
       expect(room.version).toBe(0);
     });
 
-    it('room with two players has version 0', () => {
+    it('room with two players has version 1', () => {
       const room = createRoomModel({ playerId: WHITE_ID });
       const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
       if (!joined.success) throw new Error('Join failed');
-      expect(joined.room.version).toBe(0);
+      expect(joined.room.version).toBe(1);
     });
   });
 
@@ -268,7 +268,7 @@ describe('Version and Optimistic Locking', () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.room.version).toBe(1);
+        expect(result.room.version).toBe(2);
       }
     });
 
@@ -277,23 +277,23 @@ describe('Version and Optimistic Locking', () => {
       const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
       if (!joined.success) throw new Error('Join failed');
 
-      // White move: e4
+      // White move: e4 (join: v0->v1, move: v1->v2)
       const r1 = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
       expect(r1.success).toBe(true);
       if (!r1.success) return;
-      expect(r1.room.version).toBe(1);
+      expect(r1.room.version).toBe(2);
 
-      // Black move: e5
+      // Black move: e5 (v2->v3)
       const r2 = applyMoveToRoom(r1.room, BLACK_ID, { from: 'e7', to: 'e5' });
       expect(r2.success).toBe(true);
       if (!r2.success) return;
-      expect(r2.room.version).toBe(2);
+      expect(r2.room.version).toBe(3);
 
-      // White move: Nf3
+      // White move: Nf3 (v3->v4)
       const r3 = applyMoveToRoom(r2.room, WHITE_ID, { from: 'g1', to: 'f3' });
       expect(r3.success).toBe(true);
       if (!r3.success) return;
-      expect(r3.room.version).toBe(3);
+      expect(r3.room.version).toBe(4);
     });
 
     it('each successful move increments version by exactly 1', () => {
@@ -343,11 +343,11 @@ describe('Version and Optimistic Locking', () => {
       const failed = applyMoveToRoom(joined.room, BLACK_ID, { from: 'e7', to: 'e5' });
       expect(failed.success).toBe(false);
 
-      // Now correct move
+      // Now correct move (join: v0->v1, move: v1->v2)
       const success = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
       expect(success.success).toBe(true);
       if (success.success) {
-        expect(success.room.version).toBe(1);
+        expect(success.room.version).toBe(2);
       }
     });
   });
@@ -375,16 +375,16 @@ describe('Version and Optimistic Locking', () => {
       const joined = joinRoomModel(room, { roomId: room.roomId, playerId: BLACK_ID });
       if (!joined.success) throw new Error('Join failed');
 
-      // Room starts active with version 0
+      // Room starts active with version 1 (join incremented from 0 to 1)
       expect(joined.room.status).toBe('active');
-      expect(joined.room.version).toBe(0);
+      expect(joined.room.version).toBe(1);
 
       // Make a move
       const result = applyMoveToRoom(joined.room, WHITE_ID, { from: 'e2', to: 'e4' });
       expect(result.success).toBe(true);
       if (result.success) {
         // Version incremented but status still active
-        expect(result.room.version).toBe(1);
+        expect(result.room.version).toBe(2);
         expect(result.room.status).toBe('active');
       }
     });

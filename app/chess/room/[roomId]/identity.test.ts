@@ -319,9 +319,12 @@ describe('Page state machine — spectator mode', () => {
     );
     expect(activeBranch).toBeNull();
     expect(finishedBranch).toBeNull();
-    // The waiting branch must await joinRoomOnServer (600 = safe for CRLF line endings)
+    // The waiting branch must await joinRoomOnServer.
+    // After DEBUG-6F restructuring, the path from `room.status === 'waiting'` to
+    // `joinRoomOnServer` spans the full waiting branch (white player, polling,
+    // black player, unauthenticated, authenticated join), so 2000 chars is safe.
     const waitingBranch = source.match(
-      /room\.status\s*===\s*'waiting'[\s\S]{0,600}await\s+joinRoomOnServer/
+      /room\.status\s*===\s*'waiting'[\s\S]{0,2000}await\s+joinRoomOnServer/
     );
     expect(waitingBranch).not.toBeNull();
   });
@@ -494,9 +497,11 @@ describe('Auth bootstrap — DEBUG-5', () => {
 
   it('loadRoomData effect dependency array still includes authUserId (DEBUG-2 preserved)', () => {
     const source = readRoomPage();
-    // Find the loadRoomData useEffect and verify authUserId is in deps
+    // Find the useEffect that contains `loadRoomData();` and extract its dependency array.
+    // Match the closing `});` of the useEffect body, then capture the deps array on the next line.
+    // This is more precise than the earlier greedy regex which could match the wrong useEffect.
     const loadEffect = source.match(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?loadRoomData[\s\S]*?\n\s*\}\s*,\s*\[([^\]]*)\]/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?loadRoomData\(\);[\s\S]*?\},\s*\[([^\]]*)\]\)/
     );
     expect(loadEffect).not.toBeNull();
     const deps = loadEffect![1];
@@ -547,8 +552,8 @@ describe('Stale-closure prevention -- handleMove/handleResign guards', () => {
 
   it('handleMove is wrapped in useCallback with roomState in deps', () => {
     const source = readRoomPage();
-    // Verify handleMove deps include roomState: }, [roomId, authUserId, supabaseAvailable, roomState]);
-    const hasRoomStateDeps = source.includes(', roomState]);') && source.includes('supabaseAvailable, roomState');
+    // Verify handleMove deps include roomState: }, [roomId, authUserId, supabaseAvailable, roomState, handleRealtimeUpdate]);
+    const hasRoomStateDeps = source.includes('supabaseAvailable, roomState, handleRealtimeUpdate])');
     expect(hasRoomStateDeps).toBe(true);
   });
 

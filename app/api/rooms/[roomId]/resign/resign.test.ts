@@ -93,7 +93,8 @@ describe('Resign domain logic', () => {
 
     expect(result.room.status).toBe('finished');
     expect(result.room.gameState.status).toBe('resignation');
-    expect(result.room.version).toBe(1);
+    // Join: v0->v1, Resignation: v1->v2
+    expect(result.room.version).toBe(2);
   });
 
   it('rejects non-player', async () => {
@@ -220,6 +221,7 @@ describe('Resign route — serialization roundtrip', () => {
 
     expect(deserialized.status).toBe('finished');
     expect(deserialized.gameState.status).toBe('resignation');
-    expect(deserialized.version).toBe(1);
+    // Join: v0->v1, Resign: v1->v2
+    expect(deserialized.version).toBe(2);
   });
 });

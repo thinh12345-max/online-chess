@@ -196,7 +196,7 @@ describe('Concurrent Identical Requests', () => {
     const { room, whiteId } = createActiveRoom(storage);
 
     const payload: ChessMovePayload = { from: 'e2', to: 'e4' };
-    const expectedVersion = room.version; // 0
+    const expectedVersion = room.version; // 1 (join incremented from 0)
 
     // Run concurrently using Promise.all with async storage
     const [resultA, resultB] = await Promise.all([
@@ -350,7 +350,7 @@ describe('Stale Retry After Success', () => {
     const { room, whiteId } = createActiveRoom(storage);
 
     const payload: ChessMovePayload = { from: 'e2', to: 'e4' };
-    const staleVersion = room.version; // 0
+    const staleVersion = room.version; // 1 (join incremented from 0)
 
     // First request succeeds
     const first = await applyMoveAsync(room.roomId, whiteId, payload, storage);
@@ -358,15 +358,15 @@ describe('Stale Retry After Success', () => {
     if (!first.success) return;
 
     const updatedRoom = first.room;
-    expect(updatedRoom.version).toBe(1);
+    expect(updatedRoom.version).toBe(2);
 
     // Retry with same stale version must fail
     // Note: applyMoveAsync reads current room state from storage first
-    // The stale version (0) no longer matches current version (1)
+    // The stale version (1) no longer matches current version (2)
     await applyMoveAsync(updatedRoom.roomId, whiteId, payload, storage);
 
     // The retry should either:
-    // 1. Fail because the stored version is now 1 (not 0)
+    // 1. Fail because the stored version is now 2 (not 1)
     // 2. Or succeed but then conflict at storage layer
     // The key invariant: final version must NOT be staleVersion + 2
     const finalRoom = storage.getRoom(updatedRoom.roomId)!;
@@ -414,19 +414,19 @@ describe('Same Move After Success', () => {
     expect(first.success).toBe(true); if (!first.success) throw new Error("Expected first to succeed");
 
     const updatedRoom = first.room!;
-    expect(updatedRoom.version).toBe(1);
+    expect(updatedRoom.version).toBe(2);
 
     // Second identical request must fail or conflict
     await applyMoveAsync(updatedRoom.roomId, whiteId, payload, storage);
 
     // The second request should fail because:
-    // 1. The stored version is now 1 (not 0)
-    // 2. The request carries the original room state with version 0
+    // 1. The stored version is now 2 (not 1)
+    // 2. The request carries the original room state with version 1
     // OR it succeeds but then fails at storage layer
 
     const finalRoom = storage.getRoom(updatedRoom.roomId)!;
     // Version should not have incremented again
-    expect(finalRoom.version).toBe(1);
+    expect(finalRoom.version).toBe(2);
 
     // Move history should not have duplicate e4
     expect(finalRoom.gameState.history.length).toBeLessThanOrEqual(1);
@@ -455,8 +455,8 @@ describe('Same Move After Success', () => {
     );
     expect(e4Moves.length).toBe(1);
 
-    // Version is exactly 1
-    expect(finalRoom.version).toBe(1);
+    // Version is exactly 2 (join: v0->v1, move: v1->v2)
+    expect(finalRoom.version).toBe(2);
   });
 });
 
@@ -590,13 +590,14 @@ describe('Sequential Valid Moves', () => {
       const result = applyMoveToRoom(currentRoom, move.playerId, { from: move.from, to: move.to });
       expect(result.success).toBe(true); if (!result.success) throw new Error("Expected result to succeed");
       if (result.success) {
-        expect(result.room.version).toBe(i + 1);
+        // Join: v0->v1. After i moves: v(1+i+1) = v(i+2)
+        expect(result.room.version).toBe(i + 2);
         currentRoom = result.room;
       }
     }
 
-    // Final state checks
-    expect(currentRoom.version).toBe(5);
+    // Final state: join v0->v1 + 5 moves v1->v6
+    expect(currentRoom.version).toBe(6);
     expect(currentRoom.gameState.turn).toBe('b');
     expect(currentRoom.gameState.status).toBe('playing');
     // Note: history reflects only the last move's perspective because
@@ -636,7 +637,8 @@ describe('Sequential Valid Moves', () => {
       currentRoom = result.room;
     }
 
-    expect(currentRoom.version).toBe(3);
+    // Join: v0->v1, 3 moves: v1->v4
+    expect(currentRoom.version).toBe(4);
   });
 
   it('version increments exactly once per sequential move', () => {
@@ -645,7 +647,7 @@ describe('Sequential Valid Moves', () => {
     if (!joined.success) throw new Error('Join failed');
 
     let currentRoom = joined.room;
-    const initialVersion = room.version;
+    const initialVersion = room.version; // 0 (before join)
 
     const moves = [
       { playerId: WHITE_ID, from: 'e2', to: 'e4' },
@@ -659,12 +661,13 @@ describe('Sequential Valid Moves', () => {
       const result = applyMoveToRoom(currentRoom, move.playerId, { from: move.from, to: move.to });
       expect(result.success).toBe(true); if (!result.success) throw new Error("Expected result to succeed");
       if (result.success) {
-        expect(result.room.version).toBe(initialVersion + i + 1);
+        // Join: v0->v1. After move i: v = 1 + (i + 1) = v(i + 2)
+        expect(result.room.version).toBe(initialVersion + i + 2);
         currentRoom = result.room;
       }
     }
 
-    expect(currentRoom.version).toBe(initialVersion + moves.length);
+    expect(currentRoom.version).toBe(initialVersion + moves.length + 1);
   });
 });
 
@@ -686,12 +689,12 @@ describe('Stale Request After Opponent Move', () => {
     expect(whiteResult.success).toBe(true);
     if (!whiteResult.success) throw new Error('Expected white move to succeed');
 
-    // After white's move: version = 1, black to move
+    // After white's move: version = 2 (join: v0->v1, move: v1->v2)
     const updatedRoom = whiteResult.room!;
-    expect(updatedRoom.version).toBe(1);
+    expect(updatedRoom.version).toBe(2);
     expect(updatedRoom.gameState.turn).toBe('b');
 
-    // Stale black request with stale room state (version 0, white to move)
+    // Stale black request with stale room state (version 1, white to move)
     // The stale room was captured before white's move
     const staleRoom: Room = { ...room };
     const staleResult = applyMoveToRoom(staleRoom, blackId, staleBlackPayload);
@@ -710,7 +713,8 @@ describe('Stale Request After Opponent Move', () => {
 
     // Final room state unchanged from white's successful move
     const finalRoom = storage.getRoom(room.roomId)!;
-    expect(finalRoom.version).toBe(1);
+    // Join: v0->v1, White move: v1->v2
+    expect(finalRoom.version).toBe(2);
     expect(finalRoom.gameState.turn).toBe('b');
   });
 
@@ -735,13 +739,13 @@ describe('Stale Request After Opponent Move', () => {
     expect(whiteResult.success).toBe(true);
     if (!whiteResult.success) throw new Error('Expected white move to succeed');
 
-    // After white's move: version=1, black to move, staleness verified
+    // After white's move: version=2, black to move, staleness verified
     const updatedRoom = whiteResult.room!;
-    expect(updatedRoom.version).toBe(1);
+    expect(updatedRoom.version).toBe(2);
     expect(updatedRoom.gameState.turn).toBe('b');
 
     // Black's stale request — built from the stale room captured before white's move.
-    // Even though staleness passed (version 0 == stored 0), the domain layer
+    // Even though staleness passed (version 1 == stored 1), the domain layer
     // also validated turn and must reject black because it's white's turn on the stale room.
     const staleBlackResult = applyMoveToRoom(staleRoom, blackId, blackPayload);
 
@@ -754,7 +758,7 @@ describe('Stale Request After Opponent Move', () => {
 
     // Final room is white's successful move only
     const finalRoom = storage.getRoom(room.roomId)!;
-    expect(finalRoom.version).toBe(1);
+    expect(finalRoom.version).toBe(2);
     expect(finalRoom.gameState.fen).toBe(whiteResult.room!.gameState.fen);
   });
 

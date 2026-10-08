@@ -259,6 +259,54 @@ describe('Room Joining', () => {
       expect(getPlayerCount(result.room)).toBe(2);
     }
   });
+
+  it('join increments version from 0 to 1', () => {
+    expect(room.version).toBe(0);
+    const result = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.room.version).toBe(1);
+    }
+  });
+
+  it('join does not modify chess FEN', () => {
+    const result = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.room.gameState.fen).toBe(room.gameState.fen);
+    }
+  });
+
+  it('join does not modify gameState.turn', () => {
+    const result = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.room.gameState.turn).toBe(room.gameState.turn);
+    }
+  });
+
+  it('join increments version sequentially across multiple joins', () => {
+    // First join: v0 -> v1
+    const result1 = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });
+    expect(result1.success).toBe(true);
+    if (result1.success) {
+      expect(result1.room.version).toBe(1);
+    }
+  });
+
+  it('shouldAcceptRoomUpdate accepts waiting-v0 to active-v1', () => {
+    // A (waiting, v0) fetches and gets (active, v1) after B joins
+    const waitingRoom = createRoom();
+    expect(waitingRoom.version).toBe(0);
+    expect(waitingRoom.status).toBe('waiting');
+
+    // Simulate a successful join: active, v1
+    const joined = joinRoom(waitingRoom, { roomId: waitingRoom.roomId, playerId: generatePlayerId() });
+    if (!joined.success) throw new Error('Join failed');
+
+    // shouldAcceptRoomUpdate(waiting-v0, active-v1) must accept
+    expect(shouldAcceptRoomUpdate(waitingRoom, joined.room)).toBe(true);
+  });
 });
 
 // ============================================================================
@@ -493,6 +541,23 @@ describe('Apply Move to Room', () => {
     expect(moveResult.success).toBe(false);
     if (!moveResult.success) {
       expect(moveResult.error).toBe('game_not_active');
+    }
+  });
+
+  it('move increments version from 1 to 2', () => {
+    // Join: v0 -> v1
+    const joined = joinRoom(room, { roomId: room.roomId, playerId: generatePlayerId() });
+    expect(joined.success).toBe(true);
+    if (!joined.success) return;
+    expect(joined.room.version).toBe(1);
+
+    const whitePlayerId = joined.room.playerWhite!.playerId;
+    const payload: ChessMovePayload = { from: 'e2', to: 'e4' };
+    const moveResult = applyMoveToRoom(joined.room, whitePlayerId, payload);
+
+    expect(moveResult.success).toBe(true);
+    if (moveResult.success) {
+      expect(moveResult.room.version).toBe(2);
     }
   });
 });
